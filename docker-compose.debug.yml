@@ -15,6 +15,7 @@ services:
       --dynamic-port-range 8000-8020
       --log-level debug
 
+
   connector:
     environment:
       - RUST_LOG=debug

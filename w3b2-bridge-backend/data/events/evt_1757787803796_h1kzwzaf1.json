@@ -1,0 +1,14 @@
+{
+  "funding_requested": {
+    "user_wallet": "38gvNjVxTWXohLjr1oTMGd5e8EyYSPCNc9RmQAfwV4JR",
+    "target_admin": "GFVXaGAGQjW8By9BEuMLb7AkBoUD2ighrL8Qfd9qjD4N",
+    "amount": "100000000",
+    "ts": "1757787802"
+  },
+  "event": "funding_requested",
+  "id": "evt_1757787803796_h1kzwzaf1",
+  "processedAt": 1757787803796,
+  "source": "grpc_connector",
+  "eventType": "funding_requested",
+  "saved_at": 1757787803796
+}
