@@ -1,0 +1,29 @@
+FROM node:18-alpine
+
+# Создаем рабочую директорию
+WORKDIR /project
+
+# Копируем package.json файлы
+COPY w3b2-bridge-frontend/package*.json ./w3b2-bridge-frontend/
+
+# Устанавливаем зависимости
+WORKDIR /project/w3b2-bridge-frontend
+RUN npm ci
+
+# Копируем исходники
+COPY w3b2-bridge-frontend/ ./
+
+# Копируем конфигурацию
+COPY w3b2-bridge-frontend/dev.env ./.env
+
+# Создаем пользователя для безопасности
+RUN addgroup -g 1001 -S nodejs
+RUN adduser -S nodejs -u 1001
+RUN chown -R nodejs:nodejs /project
+USER nodejs
+
+# Экспонируем порт
+EXPOSE 3000
+
+# Запускаем приложение
+CMD ["npm", "start"]

@@ -1,0 +1,100 @@
+version: '3.8'
+
+services:
+  # Solana Test Validator
+  solana-validator:
+    build:
+      context: .
+      dockerfile: Dockerfile.validator
+    ports:
+      - "8899:8899"  # RPC
+      - "8900:8900"  # WebSocket
+    volumes:
+      - solana-ledger:/project/test-ledger
+    environment:
+      - SOLANA_VERSION=v2.1.0
+    networks:
+      - w3b2-network
+
+  # W3B2 Bridge Program (Solana)
+  bridge-program:
+    build:
+      context: .
+      dockerfile: Dockerfile.program
+    depends_on:
+      - solana-validator
+    volumes:
+      - solana-ledger:/project/test-ledger
+    environment:
+      - SOLANA_RPC_URL=http://solana-validator:8899
+      - SOLANA_WS_URL=ws://solana-validator:8900
+    networks:
+      - w3b2-network
+
+  # W3B2 Connector (Rust)
+  connector:
+    build:
+      context: .
+      dockerfile: Dockerfile.connector
+    depends_on:
+      - bridge-program
+    ports:
+      - "50051:50051"  # gRPC
+    volumes:
+      - connector-data:/project/w3b2_db
+    environment:
+      - RPC_URL=http://solana-validator:8899
+      - WS_URL=ws://solana-validator:8900
+      - HOST=0.0.0.0
+      - PORT=50051
+    networks:
+      - w3b2-network
+
+  # W3B2 Backend (Node.js)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    depends_on:
+      - connector
+    ports:
+      - "3001:3001"  # HTTP API
+      - "50052:50052"  # gRPC
+    volumes:
+      - backend-data:/project/w3b2-bridge-backend/data
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - GRPC_PORT=50052
+      - SOLANA_RPC_URL=http://solana-validator:8899
+      - CONNECTOR_GRPC_URL=connector:50051
+      - PROGRAM_ID=3LhCu6pXXdiwpvBUrFKLxCy1XQ5qyE7v6WSCLbkbS8Dr
+      - DATABASE_URL=sqlite:./data/database.sqlite
+      - ENCRYPTION_KEY=your-32-character-secret-key-here
+    networks:
+      - w3b2-network
+
+  # W3B2 Frontend (React)
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"  # React dev server
+    environment:
+      - REACT_APP_API_URL=http://localhost:3001
+      - REACT_APP_WS_URL=ws://localhost:3001
+      - GENERATE_SOURCEMAP=false
+    networks:
+      - w3b2-network
+
+volumes:
+  solana-ledger:
+  connector-data:
+  backend-data:
+
+networks:
+  w3b2-network:
+    driver: bridge

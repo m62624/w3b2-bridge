@@ -1,0 +1,31 @@
+FROM debian:bullseye-slim
+
+ARG SOLANA_VERSION=v2.1.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV SOLANA_VERSION_ENV=${SOLANA_VERSION}
+
+# Устанавливаем базовые пакеты
+RUN apt-get update && apt-get install -y \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Устанавливаем Solana CLI
+RUN curl -sSfL https://release.solana.com/${SOLANA_VERSION_ENV}/install | sh
+ENV PATH="/root/.local/share/solana/install/active_release/bin:${PATH}"
+
+# Создаем рабочую директорию
+WORKDIR /project
+
+# Копируем конфигурационные файлы
+COPY config.toml ./
+
+# Создаем директорию для ledger
+RUN mkdir -p test-ledger
+
+# Экспонируем порты
+EXPOSE 8899 8900
+
+# Запускаем валидатор
+CMD ["solana-test-validator", "--reset", "--ledger", "test-ledger", "--log", "test-ledger/validator.log", "--bind-address", "0.0.0.0", "--rpc-port", "8899", "--dynamic-port-range", "8000-8020"]
