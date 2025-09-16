@@ -1,8 +1,0 @@
-rpc_url = "http://127.0.0.1:8899"
-ws_url = "ws://127.0.0.1:8900"
-max_request_age_minutes = 60
-time_provider = "2025-09-13T15:52:05.075788940+00:00"
-poll_interval_secs = 3
-commitment = "Confirmed"
-data_dir = "./w3b2_db"
-log_dir = "Logs"

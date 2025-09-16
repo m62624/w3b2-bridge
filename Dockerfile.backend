@@ -1,42 +1,36 @@
-FROM node:18-alpine
+# Stage 1: build
+FROM node:20 AS builder
 
-# Устанавливаем системные зависимости
-RUN apk add --no-cache \
-    python3 \
-    make \
-    g++ \
-    git
-
-# Создаем рабочую директорию
-WORKDIR /project
-
-# Копируем package.json файлы
-COPY w3b2-bridge-backend/package*.json ./w3b2-bridge-backend/
-
-# Устанавливаем зависимости
 WORKDIR /project/w3b2-bridge-backend
-RUN npm ci --only=production
 
-# Копируем исходники
-COPY w3b2-bridge-backend/ ./
+# 1. Копируем манифесты
+COPY ./w3b2-bridge-backend/package*.json ./
 
-# Собираем проект
+# 2. Устанавливаем ВСЕ зависимости (dev + prod)
+RUN npm install
+
+# 3. Копируем исходный код
+COPY ./w3b2-bridge-backend .
+
+# 4. Собираем проект
 RUN npm run build
 
-# Создаем директорию для данных
-RUN mkdir -p data
+# 5. Удаляем devDependencies для уменьшения финального образа
+RUN npm prune --production
 
-# Копируем конфигурацию
-COPY w3b2-bridge-backend/dev.env ./.env
+# Stage 2: runtime
+FROM node:20-alpine
 
-# Создаем пользователя для безопасности
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S nodejs -u 1001
-RUN chown -R nodejs:nodejs /project
-USER nodejs
+WORKDIR /project/w3b2-bridge-backend
 
-# Экспонируем порты
-EXPOSE 3001 50052
+# Копируем production-зависимости и собранный код
+COPY --from=builder /project/w3b2-bridge-backend/node_modules ./node_modules
+COPY --from=builder /project/w3b2-bridge-backend/dist ./dist
+COPY --from=builder /project/w3b2-bridge-backend/package*.json ./
 
-# Запускаем приложение
-CMD ["npm", "start"]
+# Копируем loader.js
+COPY ./w3b2-bridge-backend/loader.js ./loader.js
+
+USER node
+EXPOSE 3001
+CMD ["node", "--experimental-loader", "./loader.js", "dist/main.js"]

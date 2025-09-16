@@ -1,31 +1,22 @@
-FROM debian:bullseye-slim
+# --- Validator ---
+FROM debian:bookworm-slim
 
-ARG SOLANA_VERSION=v2.1.0
+ARG SOLANA_VERSION=2.1.0
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV SOLANA_VERSION_ENV=${SOLANA_VERSION}
-
-# Устанавливаем базовые пакеты
-RUN apt-get update && apt-get install -y \
-    curl \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# Устанавливаем Solana CLI
-RUN curl -sSfL https://release.solana.com/${SOLANA_VERSION_ENV}/install | sh
 ENV PATH="/root/.local/share/solana/install/active_release/bin:${PATH}"
 
-# Создаем рабочую директорию
-WORKDIR /project
+RUN apt-get update && apt-get install -y \
+    curl libssl-dev ca-certificates wget gnupg xz-utils \
+    && update-ca-certificates && rm -rf /var/lib/apt/lists/*
 
-# Копируем конфигурационные файлы
-COPY config.toml ./
+# Solana CLI
+RUN curl -sSfL https://release.anza.xyz/stable/install | sh -s - v${SOLANA_VERSION}
 
-# Создаем директорию для ledger
-RUN mkdir -p test-ledger
+# Директория для ledger и ключей
+VOLUME ["/ledger"]
 
-# Экспонируем порты
-EXPOSE 8899 8900
+EXPOSE 8899 8900 8901
 
-# Запускаем валидатор
-CMD ["solana-test-validator", "--reset", "--ledger", "test-ledger", "--log", "test-ledger/validator.log", "--bind-address", "0.0.0.0", "--rpc-port", "8899", "--dynamic-port-range", "8000-8020"]
+# по умолчанию reset (новый ledger)
+CMD ["solana-test-validator", "--ledger", "/ledger", "--reset"]

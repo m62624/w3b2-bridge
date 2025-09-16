@@ -15,14 +15,24 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "baseUrl": "./",
-    "types": ["node", "jest"],
-    "lib": ["ES2022"],
+    "types": [
+      "node",
+      "jest"
+    ],
+    "lib": [
+      "ES2022"
+    ],
     "paths": {
-      "@/*": ["src/*"],
+      "@/*": [
+        "src/*"
+      ],
     }
   },
   "include": [
     "src/**/*"
   ],
-  "exclude": ["node_modules", "dist"]
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
 }

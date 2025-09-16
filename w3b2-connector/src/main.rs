@@ -1,10 +1,12 @@
 use anyhow::Context;
 use anyhow::Result;
 use chrono::Local;
+use clap::Parser;
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
 use tokio_stream::StreamExt;
 use tonic::{transport::Server, Request, Response, Status};
+use tracing::Level;
 use w3b2_bridge_program::types::CommandMode;
 use w3b2_connector::events::BridgeEvent as Event;
 use w3b2_connector::{Storage, SyncConfig, Synchronizer};
@@ -15,6 +17,17 @@ pub mod bridge_proto {
 
 use bridge_proto::bridge_service_server::{BridgeService, BridgeServiceServer};
 use bridge_proto::{BridgeEvent, Empty};
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "w3b2-connector",
+    version,
+    about = "Bridge connector gRPC server"
+)]
+struct Cli {
+    #[arg(short, long, default_value = "config.toml")]
+    config: PathBuf,
+}
 
 #[derive(Clone)]
 pub struct BridgeServer {
@@ -138,27 +151,42 @@ impl BridgeService for BridgeServer {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config_path = "config.toml";
-    let config: SyncConfig = if Path::new(config_path).exists() {
-        let content = fs::read_to_string(config_path)
-            .with_context(|| format!("Failed to read {}", config_path))?;
-        toml::from_str(&content).with_context(|| format!("Failed to parse {}", config_path))?
+    let cli = Cli::parse();
+
+    let config: SyncConfig = if cli.config.exists() {
+        let content = fs::read_to_string(&cli.config)
+            .with_context(|| format!("Failed to read {:?}", cli.config))?;
+        toml::from_str(&content).with_context(|| format!("Failed to parse {:?}", cli.config))?
     } else {
         let default_config = SyncConfig::default();
-        fs::write(config_path, toml::to_string_pretty(&default_config)?)?;
+        fs::write(&cli.config, toml::to_string_pretty(&default_config)?)?;
         default_config
     };
 
-    let logs_path = Path::new(&config.data_dir).join(&config.log_dir);
+    let logs_path = PathBuf::from(&config.data_dir).join(&config.log_dir);
     fs::create_dir_all(&logs_path)?;
     let date = Local::now().format("%Y-%m-%d").to_string();
     let log_file_path = logs_path.join(format!("w3b2-{}.log", date));
     let file = fs::File::create(log_file_path)?;
 
-    tracing_subscriber::fmt()
+    let level = match config.log_level.to_uppercase().as_str() {
+        "TRACE" => Level::TRACE,
+        "DEBUG" => Level::DEBUG,
+        "INFO" => Level::INFO,
+        "WARN" => Level::WARN,
+        "ERROR" => Level::ERROR,
+        _ => Level::INFO,
+    };
+
+    let subscriber = tracing_subscriber::fmt()
         .with_writer(file)
-        .with_max_level(tracing::Level::INFO)
-        .init();
+        .with_max_level(level);
+
+    if config.log_format.to_lowercase() == "json" {
+        subscriber.json().init();
+    } else {
+        subscriber.init();
+    }
 
     tracing::info!("{:#?}", config);
     let addr = format!("{}:{}", config.host, config.port).parse()?;

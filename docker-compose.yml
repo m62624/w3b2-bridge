@@ -1,6 +1,14 @@
-version: '3.8'
-
 services:
+  # Rust builder (сборка и артефакты)
+  builder:
+    build:
+      context: .
+      dockerfile: Dockerfile.rust.builder
+      target: builder
+    volumes:
+      - ./target:/project/target   # сохраняем артефакты наружу
+    profiles: ["builder"]
+
   # Solana Test Validator
   solana-validator:
     build:
@@ -9,37 +17,42 @@ services:
     ports:
       - "8899:8899"  # RPC
       - "8900:8900"  # WebSocket
+      - "8901:8901"  # Gossip
     volumes:
-      - solana-ledger:/project/test-ledger
-    environment:
-      - SOLANA_VERSION=v2.1.0
+      - solana-ledger:/ledger
     networks:
       - w3b2-network
+    profiles: ["validator", "deploy", "full"]
 
-  # W3B2 Bridge Program (Solana)
+  # Деплой программы
   bridge-program:
     build:
       context: .
-      dockerfile: Dockerfile.program
+      dockerfile: Dockerfile.rust.builder
+      target: builder
     depends_on:
       - solana-validator
     volumes:
-      - solana-ledger:/project/test-ledger
+      - solana-ledger:/ledger
     environment:
       - SOLANA_RPC_URL=http://solana-validator:8899
-      - SOLANA_WS_URL=ws://solana-validator:8900
+      - BRIDGE_KEYPAIR_B64=${BRIDGE_KEYPAIR_B64}
     networks:
       - w3b2-network
+    command: ["bash", "/project/deploy.sh"]
+    profiles: ["deploy", "full"]
 
-  # W3B2 Connector (Rust)
+  # W3B2 Connector
   connector:
     build:
       context: .
-      dockerfile: Dockerfile.connector
+      dockerfile: Dockerfile.rust.builder
+      target: builder
     depends_on:
+      - solana-validator
       - bridge-program
     ports:
-      - "50051:50051"  # gRPC
+      - "50051:50051"
     volumes:
       - connector-data:/project/w3b2_db
     environment:
@@ -49,18 +62,23 @@ services:
       - PORT=50051
     networks:
       - w3b2-network
+    command: >
+      bash -c "./target/release/w3b2-connector --config /project/config.toml"
+    profiles: ["deploy", "full"]
 
-  # W3B2 Backend (Node.js)
+  # Backend
   backend:
+    user: "0:0"
     build:
       context: .
       dockerfile: Dockerfile.backend
     depends_on:
       - connector
     ports:
-      - "3001:3001"  # HTTP API
-      - "50052:50052"  # gRPC
+      - "3001:3001"
+      - "50052:50052"
     volumes:
+      - ./w3b2-connector/proto:/project/w3b2-bridge-backend/proto:ro   
       - backend-data:/project/w3b2-bridge-backend/data
     environment:
       - NODE_ENV=production
@@ -73,8 +91,9 @@ services:
       - ENCRYPTION_KEY=your-32-character-secret-key-here
     networks:
       - w3b2-network
+    profiles: ["backend", "full"]
 
-  # W3B2 Frontend (React)
+  # Frontend
   frontend:
     build:
       context: .
@@ -82,13 +101,14 @@ services:
     depends_on:
       - backend
     ports:
-      - "3000:3000"  # React dev server
+      - "3000:3000"
     environment:
       - REACT_APP_API_URL=http://localhost:3001
       - REACT_APP_WS_URL=ws://localhost:3001
       - GENERATE_SOURCEMAP=false
     networks:
       - w3b2-network
+    profiles: ["frontend", "full"]
 
 volumes:
   solana-ledger:

@@ -31,6 +31,12 @@ pub struct SyncConfig {
     /// gRPC server port
     #[serde(default = "default_port")]
     pub port: u16,
+    /// Logging format: "plain" | "json"
+    #[serde(default = "default_log_format")]
+    pub log_format: String,
+    /// Logging level: "TRACE" | "DEBUG" | "INFO" | "WARN" | "ERROR"
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
 }
 
 fn default_time_provider() -> DateTime<Utc> {
@@ -43,6 +49,14 @@ fn default_host() -> String {
 
 fn default_port() -> u16 {
     50051
+}
+
+fn default_log_format() -> String {
+    "plain".to_string()
+}
+
+fn default_log_level() -> String {
+    "INFO".to_string()
 }
 
 impl Default for SyncConfig {
@@ -60,6 +74,8 @@ impl Default for SyncConfig {
             log_dir: "Logs".into(),
             host: default_host(),
             port: default_port(),
+            log_format: default_log_format(),
+            log_level: default_log_level(),
         }
     }
 }

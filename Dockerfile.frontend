@@ -1,29 +1,27 @@
-FROM node:18-alpine
+# Stage 1: build
+FROM node:20 AS builder
 
-# Создаем рабочую директорию
-WORKDIR /project
-
-# Копируем package.json файлы
-COPY w3b2-bridge-frontend/package*.json ./w3b2-bridge-frontend/
-
-# Устанавливаем зависимости
 WORKDIR /project/w3b2-bridge-frontend
-RUN npm ci
 
-# Копируем исходники
-COPY w3b2-bridge-frontend/ ./
+# Копируем только package.json для установки зависимостей
+COPY ./w3b2-bridge-frontend/package*.json ./
+RUN npm install
 
-# Копируем конфигурацию
-COPY w3b2-bridge-frontend/dev.env ./.env
+# Копируем ТОЛЬКО исходный код фронтенда в текущую директорию
+COPY ./w3b2-bridge-frontend .
 
-# Создаем пользователя для безопасности
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S nodejs -u 1001
-RUN chown -R nodejs:nodejs /project
-USER nodejs
+RUN npm run build
 
-# Экспонируем порт
+# Stage 2: runtime
+FROM node:20-alpine
+
+WORKDIR /project/w3b2-bridge-frontend
+
+RUN npm install -g serve
+
+COPY --from=builder /project/w3b2-bridge-frontend/build ./build
+
+USER node
+
 EXPOSE 3000
-
-# Запускаем приложение
-CMD ["npm", "start"]
+CMD ["serve", "-s", "build", "-l", "3000"]
