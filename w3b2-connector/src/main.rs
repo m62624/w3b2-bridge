@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use tokio_stream::StreamExt;
 use tonic::{transport::Server, Request, Response, Status};
 use tracing::Level;
-use w3b2_bridge_program::types::CommandMode;
+use w3b2_bridge_program::protocol::CommandMode;
 use w3b2_connector::events::BridgeEvent as Event;
 use w3b2_connector::{Storage, SyncConfig, Synchronizer};
 

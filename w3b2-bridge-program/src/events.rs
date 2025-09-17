@@ -41,7 +41,7 @@ pub struct CommKeyUpdated {
 #[event]
 pub struct FundingRequested {
     pub user_wallet: Pubkey,
-    pub user_comm_pubkey: Pubkey, // ДОБАВЛЕНО
+    pub user_comm_pubkey: Pubkey,
     pub target_admin: Pubkey,
     pub amount: u64,
     pub ts: i64,

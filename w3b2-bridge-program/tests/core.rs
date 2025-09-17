@@ -13,8 +13,8 @@ use solana_sdk::{
     message::VersionedMessage, pubkey::Pubkey, signature::Keypair, signer::Signer,
     transaction::VersionedTransaction,
 };
-use w3b2_bridge_program::sm_accounts::FundingRequest;
-use w3b2_bridge_program::types::FundingStatus;
+use w3b2_bridge_program::state::FundingRequest;
+use w3b2_bridge_program::protocol::FundingStatus;
 
 const PATH_SBF: &str = "../target/deploy/w3b2_bridge_program.so";
 

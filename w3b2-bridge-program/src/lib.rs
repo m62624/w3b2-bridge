@@ -5,16 +5,16 @@
 pub mod errors;
 pub mod events;
 pub mod instructions;
-pub mod sm_accounts;
-pub mod types;
+pub mod protocol;
+pub mod state;
 
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::clock;
 
 use errors::*;
 use events::*;
-use sm_accounts::*;
-use types::*;
+use protocol::*;
+use state::*;
 
 declare_id!("3LhCu6pXXdiwpvBUrFKLxCy1XQ5qyE7v6WSCLbkbS8Dr");
 
