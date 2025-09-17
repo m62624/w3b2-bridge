@@ -10,10 +10,14 @@ pub enum BridgeError {
     PayloadTooLarge,
     #[msg("Funding request has already been processed")]
     RequestAlreadyProcessed,
-    #[msg("Insufficient funds in admin profile to approve funding request")]
-    InsufficientFundsForFunding,
-    #[msg("Insufficient funds to create admin profile PDA")]
-    InsufficientFundsForAdmin,
+    #[msg("Insufficient funds for this request")]
+    InsufficientFunds,
     #[msg("Account is inactive")]
     InactiveAccount,
+    #[msg("Invalid account owner")]
+    InvalidAccountOwner,
+    #[msg("Invalid account type")]
+    InvalidAccountType,
+    #[msg("Recipient account is not active")]
+    RecipientAccountInactive,
 }

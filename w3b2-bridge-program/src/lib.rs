@@ -2,7 +2,6 @@
 #![allow(deprecated)]
 #![allow(unexpected_cfgs)]
 
-pub mod command;
 pub mod errors;
 pub mod events;
 pub mod instructions;
@@ -57,5 +56,14 @@ pub mod w3b2_bridge_program {
     /// This is called by the service's admin wallet.
     pub fn approve_funding(ctx: Context<ApproveFunding>) -> Result<()> {
         instructions::approve_funding(ctx)
+    }
+
+    pub fn dispatch_command(
+        ctx: Context<DispatchCommand>,
+        command_id: u64,
+        mode: CommandMode,
+        payload: Vec<u8>,
+    ) -> Result<()> {
+        instructions::dispatch_command(ctx, command_id, mode, payload)
     }
 }

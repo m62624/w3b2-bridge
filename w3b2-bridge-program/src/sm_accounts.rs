@@ -26,51 +26,65 @@ pub struct UserAccount {
     pub meta: AccountMeta,
 }
 
-#[derive(Debug, Accounts)]
+#[derive(Accounts)]
 pub struct RegisterAdmin<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>, // Ключ №1: плательщик
+    pub authority: Signer<'info>, // Ключ №2: основной
+    pub co_signer: Signer<'info>, // Ключ №3: дополнительный
     #[account(
         init,
         payer = payer,
-        space = 8 + 32 + 32 + 1, // discriminator + owner + co_signer + active
-        seeds = [b"admin", co_signer.key().as_ref()],
+        space = 8 + std::mem::size_of::<AdminAccount>(),
+        seeds = [b"admin", authority.key().as_ref(), co_signer.key().as_ref()],
         bump
     )]
     pub admin_account: Account<'info, AdminAccount>,
-
-    #[account(mut)]
-    pub payer: Signer<'info>, // основной кошелек
-    pub authority: Signer<'info>, // основной кошелек (тот же)
-    pub co_signer: Signer<'info>, // уникальный ключ для этого PDA
     pub system_program: Program<'info, System>,
 }
 
-#[derive(Debug, Accounts)]
+#[derive(Accounts)]
 pub struct RegisterUser<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub user_wallet: Signer<'info>, // Для юзера это и есть authority
+    pub co_signer: Signer<'info>,
     #[account(
         init,
         payer = payer,
-        space = 8 + 32 + 32 + 8, // discriminator + owner + co_signer + balance
-        seeds = [b"user", co_signer.key().as_ref()],
+        space = 8 + std::mem::size_of::<UserAccount>(),
+        seeds = [b"user", user_wallet.key().as_ref(), co_signer.key().as_ref()],
         bump
     )]
     pub user_account: Account<'info, UserAccount>,
-
-    #[account(mut)]
-    pub payer: Signer<'info>, // основной кошелек
-    pub user_wallet: Signer<'info>, // владелец пользователя
-    pub co_signer: Signer<'info>,   // уникальный co-signer для PDA
     pub system_program: Program<'info, System>,
 }
 
-#[derive(Debug, Accounts)]
+#[derive(Accounts)]
 pub struct DeactivateAdmin<'info> {
-    #[account(mut)]
+    pub authority: Signer<'info>, // Ключ №2
+    pub co_signer: Signer<'info>, // Ключ №3
+    #[account(
+        mut,
+        seeds = [b"admin", authority.key().as_ref(), co_signer.key().as_ref()],
+        bump,
+        constraint = admin_account.meta.owner == authority.key() @ BridgeError::Unauthorized,
+        constraint = admin_account.meta.co_signer == co_signer.key() @ BridgeError::Unauthorized,
+    )]
     pub admin_account: Account<'info, AdminAccount>,
 }
 
-#[derive(Debug, Accounts)]
+#[derive(Accounts)]
 pub struct DeactivateUser<'info> {
-    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub co_signer: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"user", authority.key().as_ref(), co_signer.key().as_ref()],
+        bump,
+        constraint = user_account.meta.owner == authority.key() @ BridgeError::Unauthorized,
+        constraint = user_account.meta.co_signer == co_signer.key() @ BridgeError::Unauthorized,
+    )]
     pub user_account: Account<'info, UserAccount>,
 }
 
@@ -102,32 +116,43 @@ pub struct RequestFunding<'info> {
 }
 
 /// Admin approves funding request
-#[derive(Debug, Accounts)]
+#[derive(Accounts)]
 pub struct ApproveFunding<'info> {
+    pub admin_authority: Signer<'info>, // Ключ №2 админа
+    pub admin_co_signer: Signer<'info>, // Ключ №3 админа
     #[account(
         mut,
-        seeds = [b"admin", admin_authority.key().as_ref()],
+        seeds = [b"admin", admin_authority.key().as_ref(), admin_co_signer.key().as_ref()],
         bump,
+        constraint = admin_account.meta.owner == admin_authority.key() @ BridgeError::Unauthorized,
+        constraint = admin_account.meta.co_signer == admin_co_signer.key() @ BridgeError::Unauthorized,
     )]
     pub admin_account: Account<'info, AdminAccount>,
     #[account(mut)]
     pub funding_request: Account<'info, FundingRequest>,
     #[account(mut)]
-    pub user_wallet: SystemAccount<'info>,
-    pub admin_authority: Signer<'info>,
-    pub system_program: Program<'info, System>,
+    pub user_wallet: AccountInfo<'info>,
 }
 
-#[derive(Debug, Accounts)]
-pub struct DispatchCommandAdmin<'info> {
+#[derive(Accounts)]
+pub struct DispatchCommand<'info> {
+    /// Ключ №2 отправителя (его `owner`).
     pub authority: Signer<'info>,
-    #[account(mut)]
-    pub admin_account: Account<'info, AdminAccount>,
-}
+    /// Ключ №3 отправителя.
+    pub co_signer: Signer<'info>,
 
-#[derive(Debug, Accounts)]
-pub struct DispatchCommandUser<'info> {
-    pub authority: Signer<'info>,
-    #[account(mut)]
-    pub user_account: Account<'info, UserAccount>,
+    /// Аккаунт отправителя (может быть UserAccount или AdminAccount).
+    /// Проверяем, что владелец аккаунта - наша программа.
+    #[account(
+        mut,
+        constraint = sender.owner == &crate::ID @ BridgeError::InvalidAccountOwner
+    )]
+    pub sender: AccountInfo<'info>,
+
+    /// Аккаунт получателя. Также должен принадлежать нашей программе.
+    #[account(
+        mut,
+        constraint = recipient.owner == &crate::ID @ BridgeError::InvalidAccountOwner
+    )]
+    pub recipient: AccountInfo<'info>,
 }

@@ -27,21 +27,34 @@ pub fn register_admin(ctx: Context<RegisterAdmin>, initial_balance: u64) -> Resu
     admin.meta.co_signer = ctx.accounts.co_signer.key();
     admin.meta.active = true;
 
+    // Получаем текущую стоимость аренды для аккаунта нашего размера
+    let rent = Rent::get()?;
+    let rent_exempt_minimum = rent.minimum_balance(8 + std::mem::size_of::<AdminAccount>());
+
+    // Общая сумма, которую нужно положить на счет PDA
+    let total_required_lamports = rent_exempt_minimum + initial_balance;
+
+    msg!("Rent-exempt minimum: {} lamports", rent_exempt_minimum);
+    msg!("Initial balance: {} lamports", initial_balance);
+    msg!("Total required: {} lamports", total_required_lamports);
+
+    // Проверяем, что у плательщика (payer) достаточно средств
     require!(
-        ctx.accounts.payer.lamports() >= initial_balance,
-        BridgeError::InsufficientFundsForAdmin
+        ctx.accounts.payer.lamports() >= total_required_lamports,
+        BridgeError::InsufficientFunds
     );
 
+    // Переводим на PDA всю необходимую сумму
     register_pda(
         admin,
         &ctx.accounts.payer,
         &ctx.accounts.system_program,
-        initial_balance,
+        total_required_lamports,
     )?;
 
     emit!(AdminRegistered {
         admin: ctx.accounts.authority.key(),
-        initial_funding: initial_balance,
+        initial_funding: initial_balance, // В событие отправляем только чистый баланс
         ts: clock::Clock::get()?.unix_timestamp,
     });
 
@@ -54,11 +67,24 @@ pub fn register_user(ctx: Context<RegisterUser>, initial_balance: u64) -> Result
     user.meta.co_signer = ctx.accounts.co_signer.key();
     user.meta.active = true;
 
+    let rent = Rent::get()?;
+    let rent_exempt_minimum = rent.minimum_balance(8 + std::mem::size_of::<UserAccount>());
+    let total_required_lamports = rent_exempt_minimum + initial_balance;
+
+    msg!("Rent-exempt minimum: {} lamports", rent_exempt_minimum);
+    msg!("Initial balance: {} lamports", initial_balance);
+    msg!("Total required: {} lamports", total_required_lamports);
+
+    require!(
+        ctx.accounts.payer.lamports() >= total_required_lamports,
+        BridgeError::InsufficientFunds // Можно добавить отдельную ошибку для юзера
+    );
+
     register_pda(
         user,
         &ctx.accounts.payer,
         &ctx.accounts.system_program,
-        initial_balance,
+        total_required_lamports,
     )?;
 
     emit!(UserRegistered {
@@ -117,10 +143,12 @@ pub fn request_funding(
 
 pub fn approve_funding(ctx: Context<ApproveFunding>) -> Result<()> {
     let funding_request = &mut ctx.accounts.funding_request;
+    let admin_account_info = ctx.accounts.admin_account.to_account_info();
 
-    let admin_account = &mut ctx.accounts.admin_account;
+    // Десериализуем данные админа, чтобы проверить статус
+    let admin_data = AdminAccount::try_deserialize(&mut &admin_account_info.data.borrow()[..])?;
+    require!(admin_data.meta.active, BridgeError::InactiveAccount);
 
-    require!(admin_account.meta.active, BridgeError::InactiveAccount);
     require!(
         funding_request.target_admin == ctx.accounts.admin_authority.key(),
         BridgeError::Unauthorized
@@ -129,23 +157,27 @@ pub fn approve_funding(ctx: Context<ApproveFunding>) -> Result<()> {
         funding_request.status == FundingStatus::Pending as u8,
         BridgeError::RequestAlreadyProcessed
     );
+
+    // --- ГЛАВНАЯ ПРОВЕРКА RENT ---
+    let rent = Rent::get()?;
+    let rent_exempt_minimum = rent.minimum_balance(admin_account_info.data_len());
+    let amount_to_transfer = funding_request.amount;
+
+    // Проверяем, что после списания на счете админа останется достаточно средств для аренды
     require!(
-        admin_account.to_account_info().lamports() >= funding_request.amount,
-        BridgeError::InsufficientFundsForFunding
+        admin_account_info.lamports() - amount_to_transfer >= rent_exempt_minimum,
+        BridgeError::InsufficientFunds
     );
 
-    **admin_account.to_account_info().try_borrow_mut_lamports()? -= funding_request.amount;
-    **ctx
-        .accounts
-        .user_wallet
-        .to_account_info()
-        .try_borrow_mut_lamports()? += funding_request.amount;
+    // Безопасное изменение балансов
+    **admin_account_info.try_borrow_mut_lamports()? -= amount_to_transfer;
+    **ctx.accounts.user_wallet.try_borrow_mut_lamports()? += amount_to_transfer;
 
     funding_request.status = FundingStatus::Approved as u8;
 
     emit!(FundingApproved {
         user_wallet: funding_request.user_wallet,
-        amount: funding_request.amount,
+        amount: amount_to_transfer,
         approved_by: funding_request.target_admin,
         ts: clock::Clock::get()?.unix_timestamp,
     });
@@ -153,47 +185,57 @@ pub fn approve_funding(ctx: Context<ApproveFunding>) -> Result<()> {
     Ok(())
 }
 
-pub fn dispatch_command_admin(
-    ctx: Context<DispatchCommandAdmin>,
+pub fn dispatch_command(
+    ctx: Context<DispatchCommand>,
     command_id: u64,
     mode: CommandMode,
     payload: Vec<u8>,
-    target_pubkey: Pubkey,
 ) -> Result<()> {
     require!(payload.len() <= 1024, BridgeError::PayloadTooLarge);
 
-    let admin = &ctx.accounts.admin_account;
-    require!(admin.meta.active, BridgeError::InactiveAccount);
-    require!(admin.meta.owner == target_pubkey, BridgeError::Unauthorized);
+    let sender_info = &ctx.accounts.sender;
+    let recipient_info = &ctx.accounts.recipient;
+    let authority = &ctx.accounts.authority;
+    let co_signer = &ctx.accounts.co_signer;
+
+    // Пытаемся десериализовать отправителя как UserAccount
+    if let Ok(user) = UserAccount::try_deserialize(&mut &sender_info.data.borrow()[..]) {
+        require!(
+            user.meta.owner == authority.key(),
+            BridgeError::Unauthorized
+        );
+        require!(
+            user.meta.co_signer == co_signer.key(),
+            BridgeError::Unauthorized
+        );
+        require!(user.meta.active, BridgeError::InactiveAccount);
+    } else if let Ok(admin) = AdminAccount::try_deserialize(&mut &sender_info.data.borrow()[..]) {
+        require!(
+            admin.meta.owner == authority.key(),
+            BridgeError::Unauthorized
+        );
+        require!(
+            admin.meta.co_signer == co_signer.key(),
+            BridgeError::Unauthorized
+        );
+        require!(admin.meta.active, BridgeError::InactiveAccount);
+    } else {
+        return err!(BridgeError::InvalidAccountType);
+    }
+
+    // 2. Проверяем получателя (recipient)
+    if let Ok(user) = UserAccount::try_deserialize(&mut &recipient_info.data.borrow()[..]) {
+        require!(user.meta.active, BridgeError::RecipientAccountInactive);
+    } else if let Ok(admin) = AdminAccount::try_deserialize(&mut &recipient_info.data.borrow()[..])
+    {
+        require!(admin.meta.active, BridgeError::RecipientAccountInactive);
+    } else {
+        return err!(BridgeError::InvalidAccountType);
+    }
 
     emit!(CommandEvent {
-        sender: ctx.accounts.authority.key(),
-        target: target_pubkey,
-        command_id,
-        mode,
-        payload,
-        ts: clock::Clock::get()?.unix_timestamp,
-    });
-
-    Ok(())
-}
-
-pub fn dispatch_command_user(
-    ctx: Context<DispatchCommandUser>,
-    command_id: u64,
-    mode: CommandMode,
-    payload: Vec<u8>,
-    target_pubkey: Pubkey,
-) -> Result<()> {
-    require!(payload.len() <= 1024, BridgeError::PayloadTooLarge);
-
-    let user = &ctx.accounts.user_account;
-    require!(user.meta.active, BridgeError::InactiveAccount);
-    require!(user.meta.owner == target_pubkey, BridgeError::Unauthorized);
-
-    emit!(CommandEvent {
-        sender: ctx.accounts.authority.key(),
-        target: target_pubkey,
+        sender: authority.key(),
+        target: recipient_info.key(), // Используем ключ PDA получателя как цель
         command_id,
         mode,
         payload,
