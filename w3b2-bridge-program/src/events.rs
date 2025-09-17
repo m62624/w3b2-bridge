@@ -30,10 +30,18 @@ pub struct UserDeactivated {
     pub ts: i64,
 }
 
+#[event]
+pub struct CommKeyUpdated {
+    pub pda_owner: Pubkey,
+    pub new_comm_pubkey: Pubkey,
+    pub ts: i64,
+}
+
 #[derive(Debug)]
 #[event]
 pub struct FundingRequested {
     pub user_wallet: Pubkey,
+    pub user_comm_pubkey: Pubkey, // ДОБАВЛЕНО
     pub target_admin: Pubkey,
     pub amount: u64,
     pub ts: i64,
@@ -44,6 +52,7 @@ pub struct FundingRequested {
 pub struct FundingApproved {
     pub user_wallet: Pubkey,
     pub approved_by: Pubkey,
+    pub admin_comm_pubkey: Pubkey,
     pub amount: u64,
     pub ts: i64,
 }
@@ -56,5 +65,14 @@ pub struct CommandEvent {
     pub command_id: u64,
     pub mode: CommandMode,
     pub payload: Vec<u8>,
+    pub ts: i64,
+}
+
+#[derive(Debug)]
+#[event]
+pub struct HttpActionEvent {
+    pub actor: Pubkey,
+    pub session_id: u64,
+    pub action_code: u16,
     pub ts: i64,
 }

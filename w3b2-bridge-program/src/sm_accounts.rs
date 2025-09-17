@@ -5,6 +5,7 @@ use super::*;
 pub struct AccountMeta {
     pub owner: Pubkey,
     pub co_signer: Pubkey,
+    pub communication_pubkey: Pubkey,
     pub active: bool,
 }
 
@@ -72,6 +73,35 @@ pub struct DeactivateAdmin<'info> {
         constraint = admin_account.meta.co_signer == co_signer.key() @ BridgeError::Unauthorized,
     )]
     pub admin_account: Account<'info, AdminAccount>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateAdminCommKey<'info> {
+    pub authority: Signer<'info>,
+    pub co_signer: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"admin", authority.key().as_ref(), co_signer.key().as_ref()],
+        bump,
+        constraint = admin_account.meta.owner == authority.key() @ BridgeError::Unauthorized,
+        constraint = admin_account.meta.co_signer == co_signer.key() @ BridgeError::Unauthorized,
+    )]
+    pub admin_account: Account<'info, AdminAccount>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateUserCommKey<'info> {
+    // Для юзера authority - это его user_wallet
+    pub authority: Signer<'info>,
+    pub co_signer: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"user", authority.key().as_ref(), co_signer.key().as_ref()],
+        bump,
+        constraint = user_account.meta.owner == authority.key() @ BridgeError::Unauthorized,
+        constraint = user_account.meta.co_signer == co_signer.key() @ BridgeError::Unauthorized,
+    )]
+    pub user_account: Account<'info, UserAccount>,
 }
 
 #[derive(Accounts)]
@@ -155,4 +185,14 @@ pub struct DispatchCommand<'info> {
         constraint = recipient.owner == &crate::ID @ BridgeError::InvalidAccountOwner
     )]
     pub recipient: AccountInfo<'info>,
+}
+
+#[derive(Accounts)]
+pub struct LogAction<'info> {
+    pub authority: Signer<'info>,
+    pub co_signer: Signer<'info>,
+    #[account(
+        constraint = actor.owner == &crate::ID @ BridgeError::InvalidAccountOwner
+    )]
+    pub actor: AccountInfo<'info>, // Аккаунт того, кто действует (User или Admin)
 }

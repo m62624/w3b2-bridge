@@ -22,28 +22,35 @@ declare_id!("3LhCu6pXXdiwpvBUrFKLxCy1XQ5qyE7v6WSCLbkbS8Dr");
 pub mod w3b2_bridge_program {
     use super::*;
 
-    /// Registers an admin account.
-    pub fn register_admin(ctx: Context<RegisterAdmin>, funding_amount: u64) -> Result<()> {
-        instructions::register_admin(ctx, funding_amount)
+    /// Registers an admin account with an initial balance and a communication public key.
+    pub fn register_admin(
+        ctx: Context<RegisterAdmin>,
+        initial_balance: u64,
+        communication_pubkey: Pubkey,
+    ) -> Result<()> {
+        instructions::register_admin(ctx, initial_balance, communication_pubkey)
     }
 
-    /// Registers a user account.
-    pub fn register_user(ctx: Context<RegisterUser>, initial_balance: u64) -> Result<()> {
-        instructions::register_user(ctx, initial_balance)
+    /// Registers a user account with an initial balance and a communication public key.
+    pub fn register_user(
+        ctx: Context<RegisterUser>,
+        initial_balance: u64,
+        communication_pubkey: Pubkey,
+    ) -> Result<()> {
+        instructions::register_user(ctx, initial_balance, communication_pubkey)
     }
 
-    /// Deactivates an admin account.
+    /// Deactivates an admin account. Requires multi-sig.
     pub fn deactivate_admin(ctx: Context<DeactivateAdmin>) -> Result<()> {
         instructions::deactivate_admin(ctx)
     }
 
-    /// Deactivates a user account.
+    /// Deactivates a user account. Requires multi-sig.
     pub fn deactivate_user(ctx: Context<DeactivateUser>) -> Result<()> {
         instructions::deactivate_user(ctx)
     }
 
-    /// User requests funding.
-    /// This instruction is called by the user's wallet.
+    /// User requests funding from a target admin.
     pub fn request_funding(
         ctx: Context<RequestFunding>,
         amount: u64,
@@ -52,12 +59,12 @@ pub mod w3b2_bridge_program {
         instructions::request_funding(ctx, amount, target_admin)
     }
 
-    /// Admin approves and funds a user's request.
-    /// This is called by the service's admin wallet.
+    /// Admin approves and funds a user's request. Requires multi-sig from the admin.
     pub fn approve_funding(ctx: Context<ApproveFunding>) -> Result<()> {
         instructions::approve_funding(ctx)
     }
 
+    /// Dispatches a command from a sender (Admin/User) to a recipient (Admin/User).
     pub fn dispatch_command(
         ctx: Context<DispatchCommand>,
         command_id: u64,
@@ -65,5 +72,20 @@ pub mod w3b2_bridge_program {
         payload: Vec<u8>,
     ) -> Result<()> {
         instructions::dispatch_command(ctx, command_id, mode, payload)
+    }
+
+    /// Logs a simple off-chain action to the blockchain. Requires multi-sig.
+    pub fn log_action(ctx: Context<LogAction>, session_id: u64, action_code: u16) -> Result<()> {
+        instructions::log_action(ctx, session_id, action_code)
+    }
+
+    /// Updates the communication public key for an admin account. Requires multi-sig.
+    pub fn update_admin_comm_key(ctx: Context<UpdateAdminCommKey>, new_key: Pubkey) -> Result<()> {
+        instructions::update_admin_comm_key(ctx, new_key)
+    }
+
+    /// Updates the communication public key for a user account. Requires multi-sig.
+    pub fn update_user_comm_key(ctx: Context<UpdateUserCommKey>, new_key: Pubkey) -> Result<()> {
+        instructions::update_user_comm_key(ctx, new_key)
     }
 }
