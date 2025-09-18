@@ -253,6 +253,7 @@ pub struct ApproveFunding<'info> {
     #[account(mut)]
     pub funding_request: Account<'info, FundingRequest>,
 
+    /// CHECK:
     /// The target user's wallet (`owner` of the User PDA) to receive the funds.
     /// Marked as `AccountInfo` and unchecked because we are only transferring lamports to it,
     /// not reading or writing its data. The address is verified against `funding_request`.
@@ -268,17 +269,15 @@ pub struct DispatchCommand<'info> {
     /// The `co_signer` of the sending account (sender). Must be a signer.
     pub co_signer: Signer<'info>,
 
-    /// The sender's PDA (either `UserAccount` or `AdminAccount`).
-    /// It's a generic `AccountInfo` to allow flexibility.
+    /// CHECK: The sender's PDA (either `UserAccount` or `AdminAccount`).
+    /// This is the correct pattern when an account can be one of multiple types.
     #[account(
-        mut, // `mut` is kept in case future logic requires state changes on send.
-        // Security check: Ensures the provided account is owned by our program,
-        // preventing someone from passing in an account from a different protocol.
+        mut,
         constraint = sender.owner == &crate::ID @ BridgeError::InvalidAccountOwner
     )]
     pub sender: AccountInfo<'info>,
 
-    /// The recipient's PDA (either `UserAccount` or `AdminAccount`).
+    /// CHECK: The recipient's PDA (either `UserAccount` or `AdminAccount`).
     #[account(
         mut,
         constraint = recipient.owner == &crate::ID @ BridgeError::InvalidAccountOwner
@@ -296,6 +295,7 @@ pub struct LogAction<'info> {
 
     /// The PDA (`UserAccount` or `AdminAccount`) of the entity performing the action.
     /// It's a generic `AccountInfo` whose ownership is verified by the signers.
+    /// CHECK:
     #[account(
         constraint = actor.owner == &crate::ID @ BridgeError::InvalidAccountOwner
     )]
