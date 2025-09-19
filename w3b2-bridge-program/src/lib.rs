@@ -68,17 +68,13 @@ pub mod w3b2_bridge_program {
     }
 
     /// Updates the off-chain communication public key for a user.
-    pub fn user_update_comm_key(
-        ctx: Context<UserUpdateCommKey>,
-        target_admin: Pubkey,
-        new_key: Pubkey,
-    ) -> Result<()> {
-        instructions::user_update_comm_key(ctx, target_admin, new_key)
+    pub fn user_update_comm_key(ctx: Context<UserUpdateCommKey>, new_key: Pubkey) -> Result<()> {
+        instructions::user_update_comm_key(ctx, new_key)
     }
 
     /// Closes the UserProfile and returns all lamports to the authority.
-    pub fn user_close_profile(ctx: Context<UserCloseProfile>, target_admin: Pubkey) -> Result<()> {
-        instructions::user_close_profile(ctx, target_admin)
+    pub fn user_close_profile(ctx: Context<UserCloseProfile>) -> Result<()> {
+        instructions::user_close_profile(ctx)
     }
 
     /// Deposits lamports from a user's ChainCard into their UserProfile PDA.

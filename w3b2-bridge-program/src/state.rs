@@ -1,6 +1,7 @@
 use crate::errors::BridgeError;
 use anchor_lang::prelude::*;
 
+
 const DEFAULT_API_SIZE: usize = 10;
 
 /// Represents the on-chain profile for a Service (Admin).
@@ -111,6 +112,7 @@ pub struct UserProfile {
     pub authority: Pubkey,
     /// Public key for off-chain communication encryption.
     pub communication_pubkey: Pubkey,
+    pub admin_authority_on_creation: Pubkey,
     /// The deposit balance for this user, used to pay for this specific admin's services.
     pub deposit_balance: u64,
 }
@@ -124,7 +126,6 @@ pub struct UserCreateProfile<'info> {
     #[account(
         init,
         payer = authority,
-        // Увеличиваем space, чтобы вместить новый pubkey
         space = 8 + std::mem::size_of::<UserProfile>(), 
         seeds = [b"user", authority.key().as_ref(), target_admin.as_ref()],
         bump
@@ -137,8 +138,11 @@ pub struct UserCreateProfile<'info> {
 pub struct UserDeposit<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
+    pub admin_profile: Account<'info, AdminProfile>,
     #[account(
         mut,
+        seeds = [b"user", authority.key().as_ref(), admin_profile.key().as_ref()], 
+        bump,
         constraint = user_profile.authority == authority.key() @ BridgeError::Unauthorized
     )]
     pub user_profile: Account<'info, UserProfile>,
@@ -164,13 +168,13 @@ pub struct UserWithdraw<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(target_admin: Pubkey)]
 pub struct UserUpdateCommKey<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
+    pub admin_profile: Account<'info, AdminProfile>, 
     #[account(
         mut,
-        seeds = [b"user", authority.key().as_ref(), target_admin.as_ref()],
+        seeds = [b"user", authority.key().as_ref(), admin_profile.key().as_ref()],
         bump,
         constraint = user_profile.authority == authority.key() @ BridgeError::Unauthorized
     )]
@@ -178,14 +182,14 @@ pub struct UserUpdateCommKey<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(target_admin: Pubkey)]
 pub struct UserCloseProfile<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
+    pub admin_profile: Account<'info, AdminProfile>,
     #[account(
         mut,
         close = authority,
-        seeds = [b"user", authority.key().as_ref(), target_admin.as_ref()],
+        seeds = [b"user", authority.key().as_ref(), admin_profile.key().as_ref()],
         bump,
         constraint = user_profile.authority == authority.key() @ BridgeError::Unauthorized
     )]
@@ -202,10 +206,12 @@ pub struct DispatchCommand<'info> {
         constraint = user_profile.authority == authority.key() @ BridgeError::Unauthorized
     )]
     pub user_profile: Account<'info, UserProfile>,
-    #[account(
+     #[account(
         mut,
         seeds = [b"admin", admin_profile.authority.as_ref()],
         bump,
+        constraint = admin_profile.authority == user_profile.admin_authority_on_creation @ BridgeError::Unauthorized
+
     )]
     pub admin_profile: Account<'info, AdminProfile>,
     pub system_program: Program<'info, System>,
@@ -214,5 +220,4 @@ pub struct DispatchCommand<'info> {
 #[derive(Accounts)]
 pub struct LogAction<'info> {
     pub authority: Signer<'info>,
-    // The PDA is not needed here as the authority's signature is sufficient proof.
 }

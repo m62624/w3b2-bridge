@@ -240,11 +240,12 @@ pub mod admin {
     }
 }
 
+// tests/instructions/mod.rs
+
 /// Helper functions specific to User actions.
 pub mod user {
     use super::*;
 
-    /// Creates a UserProfile PDA linked to a specific admin.
     pub fn create_profile(
         svm: &mut LiteSVM,
         authority: &Keypair,
@@ -260,35 +261,40 @@ pub mod user {
     pub fn update_comm_key(
         svm: &mut LiteSVM,
         authority: &Keypair,
-        target_admin: Pubkey,
+        admin_pda: Pubkey,
         new_comm_key: Pubkey,
     ) {
-        let update_ix = ix_update_comm_key(authority, target_admin, new_comm_key);
+        let update_ix = ix_update_comm_key(authority, admin_pda, new_comm_key);
         common::build_and_send_tx(svm, vec![update_ix], authority, vec![]);
     }
 
-    pub fn close_profile(svm: &mut LiteSVM, authority: &Keypair, target_admin: Pubkey) {
-        let close_ix = ix_close_profile(authority, target_admin);
+    /// A high-level function that handles closing a UserProfile.
+    pub fn close_profile(svm: &mut LiteSVM, authority: &Keypair, admin_pda: Pubkey) {
+        let close_ix = ix_close_profile(authority, admin_pda);
         common::build_and_send_tx(svm, vec![close_ix], authority, vec![]);
     }
 
     /// Deposits lamports into a UserProfile PDA.
-    pub fn deposit(svm: &mut LiteSVM, authority: &Keypair, target_admin: Pubkey, amount: u64) {
-        let deposit_ix = ix_deposit(authority, target_admin, amount);
+    pub fn deposit(svm: &mut LiteSVM, authority: &Keypair, admin_pda: Pubkey, amount: u64) {
+        let deposit_ix = ix_deposit(authority, admin_pda, amount);
         common::build_and_send_tx(svm, vec![deposit_ix], authority, vec![]);
     }
 
+    /// Withdraws lamports from a user's UserProfile PDA to a destination wallet.
     pub fn withdraw(
         svm: &mut LiteSVM,
         authority: &Keypair,
-        target_admin: Pubkey,
+        admin_pda: Pubkey,
         destination: Pubkey,
         amount: u64,
     ) {
-        let withdraw_ix = ix_withdraw(authority, target_admin, destination, amount);
+        let withdraw_ix = ix_withdraw(authority, admin_pda, destination, amount);
         common::build_and_send_tx(svm, vec![withdraw_ix], authority, vec![]);
     }
 
+    // --- Low-level Instruction Builders ---
+
+    /// This function remains unchanged.
     fn ix_create_profile(
         authority: &Keypair,
         communication_pubkey: Pubkey,
@@ -312,36 +318,29 @@ pub mod user {
         }
         .to_account_metas(None);
 
-        let ix = Instruction {
-            program_id: w3b2_bridge_program::ID,
-            accounts,
-            data,
-        };
-
-        (ix, user_pda)
+        (
+            Instruction {
+                program_id: w3b2_bridge_program::ID,
+                accounts,
+                data,
+            },
+            user_pda,
+        )
     }
 
-    /// A low-level helper to build the `user_update_comm_key` instruction.
-    fn ix_update_comm_key(
-        authority: &Keypair,
-        target_admin: Pubkey,
-        new_key: Pubkey,
-    ) -> Instruction {
+    fn ix_update_comm_key(authority: &Keypair, admin_pda: Pubkey, new_key: Pubkey) -> Instruction {
         let (user_pda, _) = Pubkey::find_program_address(
-            &[b"user", authority.pubkey().as_ref(), target_admin.as_ref()],
+            &[b"user", authority.pubkey().as_ref(), admin_pda.as_ref()],
             &w3b2_bridge_program::ID,
         );
 
-        // The instruction needs both target_admin (for the Accounts macro) and the new_key.
-        let data = w3b2_instruction::UserUpdateCommKey {
-            target_admin,
-            new_key,
-        }
-        .data();
+        // Изменено: Убран `target_admin` из данных инструкции
+        let data = w3b2_instruction::UserUpdateCommKey { new_key }.data();
 
-        // The accounts context only needs the authority and the user profile to update.
+        // Изменено: Добавлен `admin_pda` в аккаунты
         let accounts = w3b2_accounts::UserUpdateCommKey {
             authority: authority.pubkey(),
+            admin_profile: admin_pda,
             user_profile: user_pda,
         }
         .to_account_metas(None);
@@ -353,20 +352,19 @@ pub mod user {
         }
     }
 
-    /// A low-level helper to build the `user_close_profile` instruction.
-    fn ix_close_profile(authority: &Keypair, target_admin: Pubkey) -> Instruction {
-        // Find the PDA address for the profile to be closed.
+    fn ix_close_profile(authority: &Keypair, admin_pda: Pubkey) -> Instruction {
         let (user_pda, _) = Pubkey::find_program_address(
-            &[b"user", authority.pubkey().as_ref(), target_admin.as_ref()],
+            &[b"user", authority.pubkey().as_ref(), admin_pda.as_ref()],
             &w3b2_bridge_program::ID,
         );
 
-        // This instruction needs target_admin to validate the PDA address.
-        let data = w3b2_instruction::UserCloseProfile { target_admin }.data();
+        // Изменено: Данные инструкции теперь пустые
+        let data = w3b2_instruction::UserCloseProfile {}.data();
 
-        // The accounts context requires the authority and the user profile to close.
+        // Изменено: Добавлен `admin_pda` в аккаунты
         let accounts = w3b2_accounts::UserCloseProfile {
             authority: authority.pubkey(),
+            admin_profile: admin_pda,
             user_profile: user_pda,
         }
         .to_account_metas(None);
@@ -378,16 +376,18 @@ pub mod user {
         }
     }
 
-    fn ix_deposit(authority: &Keypair, target_admin: Pubkey, amount: u64) -> Instruction {
+    fn ix_deposit(authority: &Keypair, admin_pda: Pubkey, amount: u64) -> Instruction {
         let (user_pda, _) = Pubkey::find_program_address(
-            &[b"user", authority.pubkey().as_ref(), target_admin.as_ref()],
+            &[b"user", authority.pubkey().as_ref(), admin_pda.as_ref()],
             &w3b2_bridge_program::ID,
         );
 
         let data = w3b2_instruction::UserDeposit { amount }.data();
 
+        // Изменено: Добавлен `admin_pda` в аккаунты для безопасной проверки
         let accounts = w3b2_accounts::UserDeposit {
             authority: authority.pubkey(),
+            admin_profile: admin_pda,
             user_profile: user_pda,
             system_program: system_program::id(),
         }
@@ -411,10 +411,10 @@ pub mod user {
             &w3b2_bridge_program::ID,
         );
 
-        // The instruction needs both the amount and the target_admin.
+        // Изменено: Убран `target_admin` из данных инструкции
         let data = w3b2_instruction::UserWithdraw { amount }.data();
 
-        // The accounts context requires the authority, user profile, destination, and system program.
+        // Аккаунты уже были исправлены ранее, здесь все верно
         let accounts = w3b2_accounts::UserWithdraw {
             authority: authority.pubkey(),
             admin_profile: admin_pda,

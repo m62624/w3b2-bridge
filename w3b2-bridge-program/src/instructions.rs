@@ -96,6 +96,7 @@ pub fn user_create_profile(
     user_profile.authority = ctx.accounts.authority.key();
     user_profile.deposit_balance = 0;
     user_profile.communication_pubkey = communication_pubkey;
+    user_profile.admin_authority_on_creation = target_admin;
 
     emit!(UserProfileCreated {
         authority: user_profile.authority,
@@ -106,11 +107,7 @@ pub fn user_create_profile(
     Ok(())
 }
 
-pub fn user_update_comm_key(
-    ctx: Context<UserUpdateCommKey>,
-    _target_admin: Pubkey,
-    new_key: Pubkey,
-) -> Result<()> {
+pub fn user_update_comm_key(ctx: Context<UserUpdateCommKey>, new_key: Pubkey) -> Result<()> {
     ctx.accounts.user_profile.communication_pubkey = new_key;
     emit!(UserCommKeyUpdated {
         authority: ctx.accounts.authority.key(),
@@ -120,7 +117,7 @@ pub fn user_update_comm_key(
     Ok(())
 }
 
-pub fn user_close_profile(_ctx: Context<UserCloseProfile>, _target_admin: Pubkey) -> Result<()> {
+pub fn user_close_profile(_ctx: Context<UserCloseProfile>) -> Result<()> {
     emit!(UserProfileClosed {
         authority: _ctx.accounts.authority.key(),
         ts: Clock::get()?.unix_timestamp,
