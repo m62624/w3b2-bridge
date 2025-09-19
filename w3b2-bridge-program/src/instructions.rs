@@ -259,8 +259,8 @@ pub fn dispatch_command(
         );
 
         let user_bump = ctx.bumps.user_profile;
-        let authority_key = ctx.accounts.authority.key(); // FIX: Create a longer-lived value
-        let admin_profile_key = admin_profile.to_account_info().key(); // FIX: Create a longer-lived value
+        let authority_key = ctx.accounts.authority.key();
+        let admin_profile_key = admin_profile.to_account_info().key();
         let user_seeds = &[
             &b"user"[..],
             authority_key.as_ref(),

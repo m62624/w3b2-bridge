@@ -35,7 +35,7 @@ pub struct AdminRegisterProfile<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(new_prices: Vec<(u64, u64)>)]
+#[instruction(args: UpdatePricesArgs)]
 pub struct AdminUpdatePrices<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -43,7 +43,7 @@ pub struct AdminUpdatePrices<'info> {
         mut,
         seeds = [b"admin", authority.key().as_ref()],
         bump,
-        realloc = 8 + std::mem::size_of::<AdminProfile>() + (new_prices.len() * std::mem::size_of::<(u64, u64)>()),
+        realloc = 8 + std::mem::size_of::<AdminProfile>() + (args.new_prices.len() * std::mem::size_of::<(u64, u64)>()),
         realloc::payer = authority,
         realloc::zero = false,
         constraint = admin_profile.authority == authority.key() @ BridgeError::Unauthorized
