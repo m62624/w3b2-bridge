@@ -86,12 +86,8 @@ pub mod w3b2_bridge_program {
         instructions::user_deposit(ctx, amount)
     }
     /// Withdraws lamports from a user's UserProfile PDA to a destination wallet.
-    pub fn user_withdraw(
-        ctx: Context<UserWithdraw>,
-        amount: u64,
-        target_admin: Pubkey,
-    ) -> Result<()> {
-        instructions::user_withdraw(ctx, amount, target_admin)
+    pub fn user_withdraw(ctx: Context<UserWithdraw>, amount: u64) -> Result<()> {
+        instructions::user_withdraw(ctx, amount)
     }
 
     // --- Operational Instructions ---

@@ -146,13 +146,13 @@ pub struct UserDeposit<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(target_admin: Pubkey)]
 pub struct UserWithdraw<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
-    #[account(
+    pub admin_profile: Account<'info, AdminProfile>,
+     #[account(
         mut,
-        seeds = [b"user", authority.key().as_ref(), target_admin.as_ref()],
+        seeds = [b"user", authority.key().as_ref(), admin_profile.key().as_ref()],
         bump,
         constraint = user_profile.authority == authority.key() @ BridgeError::Unauthorized
     )]

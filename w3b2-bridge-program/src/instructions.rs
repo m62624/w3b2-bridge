@@ -1,7 +1,7 @@
 // src/instructions.rs
 
 use super::*;
-use solana_program::{program::invoke, program::invoke_signed, system_instruction};
+use solana_program::{program::invoke, system_instruction};
 
 const MAX_PAYLOAD_SIZE: usize = 1024;
 
@@ -58,7 +58,6 @@ pub fn admin_update_prices(
 
 pub fn admin_withdraw(ctx: Context<AdminWithdraw>, amount: u64) -> Result<()> {
     let admin_profile = &mut ctx.accounts.admin_profile;
-    let authority = &ctx.accounts.authority;
     let destination = &ctx.accounts.destination;
 
     require!(
@@ -73,23 +72,8 @@ pub fn admin_withdraw(ctx: Context<AdminWithdraw>, amount: u64) -> Result<()> {
         BridgeError::RentExemptViolation
     );
 
-    let bump = ctx.bumps.admin_profile;
-    let authority_key = authority.key();
-    let seeds = &[&b"admin"[..], authority_key.as_ref(), &[bump]];
-
-    invoke_signed(
-        &system_instruction::transfer(
-            &admin_profile.to_account_info().key(),
-            &destination.key(),
-            amount,
-        ),
-        &[
-            admin_profile.to_account_info(),
-            destination.to_account_info(),
-            ctx.accounts.system_program.to_account_info(),
-        ],
-        &[&seeds[..]],
-    )?;
+    **admin_profile.to_account_info().try_borrow_mut_lamports()? -= amount;
+    **destination.to_account_info().try_borrow_mut_lamports()? += amount;
 
     admin_profile.balance -= amount;
 
@@ -171,9 +155,8 @@ pub fn user_deposit(ctx: Context<UserDeposit>, amount: u64) -> Result<()> {
     Ok(())
 }
 
-pub fn user_withdraw(ctx: Context<UserWithdraw>, amount: u64, target_admin: Pubkey) -> Result<()> {
+pub fn user_withdraw(ctx: Context<UserWithdraw>, amount: u64) -> Result<()> {
     let user_profile = &mut ctx.accounts.user_profile;
-    let authority = &ctx.accounts.authority;
     let destination = &ctx.accounts.destination;
 
     require!(
@@ -188,28 +171,8 @@ pub fn user_withdraw(ctx: Context<UserWithdraw>, amount: u64, target_admin: Pubk
         BridgeError::RentExemptViolation
     );
 
-    let bump = ctx.bumps.user_profile;
-    let authority_key = authority.key();
-    let seeds = &[
-        &b"user"[..],
-        authority_key.as_ref(),
-        target_admin.as_ref(),
-        &[bump],
-    ];
-
-    invoke_signed(
-        &system_instruction::transfer(
-            &user_profile.to_account_info().key(),
-            &destination.key(),
-            amount,
-        ),
-        &[
-            user_profile.to_account_info(),
-            destination.to_account_info(),
-            ctx.accounts.system_program.to_account_info(),
-        ],
-        &[&seeds[..]],
-    )?;
+    **user_profile.to_account_info().try_borrow_mut_lamports()? -= amount;
+    **destination.to_account_info().try_borrow_mut_lamports()? += amount;
 
     user_profile.deposit_balance -= amount;
 
@@ -258,29 +221,8 @@ pub fn dispatch_command(
             BridgeError::RentExemptViolation
         );
 
-        let user_bump = ctx.bumps.user_profile;
-        let authority_key = ctx.accounts.authority.key();
-        let admin_profile_key = admin_profile.to_account_info().key();
-        let user_seeds = &[
-            &b"user"[..],
-            authority_key.as_ref(),
-            admin_profile_key.as_ref(),
-            &[user_bump],
-        ];
-
-        invoke_signed(
-            &system_instruction::transfer(
-                &user_profile.to_account_info().key(),
-                &admin_profile.to_account_info().key(),
-                command_price,
-            ),
-            &[
-                user_profile.to_account_info(),
-                admin_profile.to_account_info(),
-                ctx.accounts.system_program.to_account_info(),
-            ],
-            &[&user_seeds[..]],
-        )?;
+        **user_profile.to_account_info().try_borrow_mut_lamports()? -= command_price;
+        **admin_profile.to_account_info().try_borrow_mut_lamports()? += command_price;
 
         user_profile.deposit_balance -= command_price;
         admin_profile.balance += command_price;

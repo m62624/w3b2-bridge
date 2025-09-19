@@ -175,3 +175,158 @@ fn test_user_close_profile_success() {
         authority_balance_before, authority_balance_after
     );
 }
+
+// In tests/user.rs
+
+#[test]
+fn test_user_deposit_success() {
+    // === 1. Arrange ===
+    let mut svm = common::setup_svm();
+
+    // Create an admin for the user to be linked to.
+    let admin_authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let admin_pda = admin::create_profile(
+        &mut svm,
+        &admin_authority,
+        common::create_keypair().pubkey(),
+    );
+
+    // Create the user profile. Initially, its deposit_balance is 0.
+    let user_authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let user_pda = user::create_profile(
+        &mut svm,
+        &user_authority,
+        common::create_keypair().pubkey(),
+        admin_pda,
+    );
+
+    // Get the state *before* the deposit.
+    let authority_balance_before = svm.get_balance(&user_authority.pubkey()).unwrap();
+    let pda_lamports_before = svm.get_balance(&user_pda).unwrap();
+
+    let deposit_amount = 2 * LAMPORTS_PER_SOL;
+
+    // === 2. Act ===
+    println!("User depositing {} lamports...", deposit_amount);
+
+    // Call the deposit helper function.
+    user::deposit(&mut svm, &user_authority, admin_pda, deposit_amount);
+
+    println!("Deposit successful.");
+
+    // === 3. Assert ===
+
+    // Fetch the final state of the user profile and the authority's wallet.
+    let user_account_data_after = svm.get_account(&user_pda).unwrap();
+    let user_profile_after =
+        UserProfile::try_deserialize(&mut user_account_data_after.data.as_slice()).unwrap();
+    let authority_balance_after = svm.get_balance(&user_authority.pubkey()).unwrap();
+
+    // Assertion 1: The internal `deposit_balance` field was correctly updated.
+    assert_eq!(user_profile_after.deposit_balance, deposit_amount);
+
+    // Assertion 2: The PDA's on-chain lamport balance correctly increased.
+    assert_eq!(
+        user_account_data_after.lamports,
+        pda_lamports_before + deposit_amount
+    );
+
+    // Assertion 3: The authority's (ChainCard) balance correctly decreased.
+    let expected_authority_balance = authority_balance_before - deposit_amount - 5000; // 5000 for tx fee
+    assert_eq!(authority_balance_after, expected_authority_balance);
+
+    println!("✅ User Deposit Test Passed!");
+    println!(
+        "   -> PDA internal balance is now: {}",
+        user_profile_after.deposit_balance
+    );
+    println!(
+        "   -> PDA lamport balance increased from {} to {}",
+        pda_lamports_before, user_account_data_after.lamports
+    );
+}
+
+#[test]
+fn test_user_withdraw_success() {
+    // === 1. Arrange ===
+    let mut svm = common::setup_svm();
+
+    // Create an admin for the user to be linked to.
+    let admin_authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let admin_pda = admin::create_profile(
+        &mut svm,
+        &admin_authority,
+        common::create_keypair().pubkey(),
+    );
+
+    // Create the user profile.
+    let user_authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let user_pda = user::create_profile(
+        &mut svm,
+        &user_authority,
+        common::create_keypair().pubkey(),
+        admin_pda,
+    );
+
+    // The user deposits funds into their profile.
+    let deposit_amount = 2 * LAMPORTS_PER_SOL;
+    user::deposit(&mut svm, &user_authority, admin_pda, deposit_amount);
+
+    // Create a destination wallet to receive the withdrawn funds.
+    let destination_wallet = common::create_keypair();
+
+    // Get the state *before* the withdrawal.
+    let pda_lamports_before = svm.get_balance(&user_pda).unwrap();
+
+    //
+    // FIX: A new keypair has no on-chain account, so its balance is conceptually 0.
+    //
+    let destination_balance_before = 0; // <-- ИЗМЕНЕНИЕ ЗДЕСЬ
+
+    let withdraw_amount = 1 * LAMPORTS_PER_SOL;
+
+    // === 2. Act ===
+    println!("User withdrawing {} lamports...", withdraw_amount);
+    user::withdraw(
+        &mut svm,
+        &user_authority,
+        admin_pda,
+        destination_wallet.pubkey(),
+        withdraw_amount,
+    );
+    println!("Withdrawal successful.");
+
+    // === 3. Assert ===
+
+    // Fetch the final state of the user profile and destination wallet.
+    let user_account_data_after = svm.get_account(&user_pda).unwrap();
+    let user_profile_after =
+        UserProfile::try_deserialize(&mut user_account_data_after.data.as_slice()).unwrap();
+    let destination_balance_after = svm.get_balance(&destination_wallet.pubkey()).unwrap();
+
+    // Assertion 1: The internal `deposit_balance` was correctly updated.
+    let expected_deposit_balance = deposit_amount - withdraw_amount;
+    assert_eq!(user_profile_after.deposit_balance, expected_deposit_balance);
+
+    // Assertion 2: The PDA's on-chain lamport balance correctly decreased.
+    assert_eq!(
+        user_account_data_after.lamports,
+        pda_lamports_before - withdraw_amount
+    );
+
+    // Assertion 3: The destination wallet's balance correctly increased.
+    assert_eq!(
+        destination_balance_after,
+        destination_balance_before + withdraw_amount
+    );
+
+    println!("✅ User Withdraw Test Passed!");
+    println!(
+        "   -> PDA internal balance is now: {}",
+        user_profile_after.deposit_balance
+    );
+    println!(
+        "   -> Destination wallet received: {} lamports",
+        destination_balance_after
+    );
+}

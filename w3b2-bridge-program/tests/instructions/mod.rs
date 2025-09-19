@@ -267,15 +267,26 @@ pub mod user {
         common::build_and_send_tx(svm, vec![update_ix], authority, vec![]);
     }
 
+    pub fn close_profile(svm: &mut LiteSVM, authority: &Keypair, target_admin: Pubkey) {
+        let close_ix = ix_close_profile(authority, target_admin);
+        common::build_and_send_tx(svm, vec![close_ix], authority, vec![]);
+    }
+
     /// Deposits lamports into a UserProfile PDA.
     pub fn deposit(svm: &mut LiteSVM, authority: &Keypair, target_admin: Pubkey, amount: u64) {
         let deposit_ix = ix_deposit(authority, target_admin, amount);
         common::build_and_send_tx(svm, vec![deposit_ix], authority, vec![]);
     }
 
-    pub fn close_profile(svm: &mut LiteSVM, authority: &Keypair, target_admin: Pubkey) {
-        let close_ix = ix_close_profile(authority, target_admin);
-        common::build_and_send_tx(svm, vec![close_ix], authority, vec![]);
+    pub fn withdraw(
+        svm: &mut LiteSVM,
+        authority: &Keypair,
+        target_admin: Pubkey,
+        destination: Pubkey,
+        amount: u64,
+    ) {
+        let withdraw_ix = ix_withdraw(authority, target_admin, destination, amount);
+        common::build_and_send_tx(svm, vec![withdraw_ix], authority, vec![]);
     }
 
     fn ix_create_profile(
@@ -378,6 +389,37 @@ pub mod user {
         let accounts = w3b2_accounts::UserDeposit {
             authority: authority.pubkey(),
             user_profile: user_pda,
+            system_program: system_program::id(),
+        }
+        .to_account_metas(None);
+
+        Instruction {
+            program_id: w3b2_bridge_program::ID,
+            accounts,
+            data,
+        }
+    }
+
+    fn ix_withdraw(
+        authority: &Keypair,
+        admin_pda: Pubkey,
+        destination: Pubkey,
+        amount: u64,
+    ) -> Instruction {
+        let (user_pda, _) = Pubkey::find_program_address(
+            &[b"user", authority.pubkey().as_ref(), admin_pda.as_ref()],
+            &w3b2_bridge_program::ID,
+        );
+
+        // The instruction needs both the amount and the target_admin.
+        let data = w3b2_instruction::UserWithdraw { amount }.data();
+
+        // The accounts context requires the authority, user profile, destination, and system program.
+        let accounts = w3b2_accounts::UserWithdraw {
+            authority: authority.pubkey(),
+            admin_profile: admin_pda,
+            user_profile: user_pda,
+            destination,
             system_program: system_program::id(),
         }
         .to_account_metas(None);
