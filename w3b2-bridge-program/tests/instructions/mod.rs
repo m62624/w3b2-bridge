@@ -1,3 +1,4 @@
+use anchor_lang::AccountDeserialize;
 use anchor_lang::{InstructionData, ToAccountMetas};
 use litesvm::LiteSVM;
 use solana_program::{instruction::Instruction, pubkey::Pubkey, system_program};
@@ -96,6 +97,11 @@ pub mod admin {
     pub fn update_prices(svm: &mut LiteSVM, authority: &Keypair, new_prices: Vec<(u64, u64)>) {
         let update_ix = ix_update_prices(authority, new_prices);
         common::build_and_send_tx(svm, vec![update_ix], authority, vec![]);
+    }
+
+    pub fn withdraw(svm: &mut LiteSVM, authority: &Keypair, destination: Pubkey, amount: u64) {
+        let withdraw_ix = ix_withdraw(authority, destination, amount);
+        common::build_and_send_tx(svm, vec![withdraw_ix], authority, vec![]);
     }
 
     /// A low-level helper to build the `admin_register_profile` instruction.
@@ -198,6 +204,180 @@ pub mod admin {
         let accounts = w3b2_accounts::AdminUpdatePrices {
             authority: authority.pubkey(),
             admin_profile: admin_pda,
+            system_program: system_program::id(),
+        }
+        .to_account_metas(None);
+
+        Instruction {
+            program_id: w3b2_bridge_program::ID,
+            accounts,
+            data,
+        }
+    }
+
+    /// A low-level helper to build the `admin_withdraw` instruction.
+    fn ix_withdraw(authority: &Keypair, destination: Pubkey, amount: u64) -> Instruction {
+        let (admin_pda, _) = Pubkey::find_program_address(
+            &[b"admin", authority.pubkey().as_ref()],
+            &w3b2_bridge_program::ID,
+        );
+
+        let data = w3b2_instruction::AdminWithdraw { amount }.data();
+
+        let accounts = w3b2_accounts::AdminWithdraw {
+            authority: authority.pubkey(),
+            admin_profile: admin_pda,
+            destination,
+            system_program: system_program::id(),
+        }
+        .to_account_metas(None);
+
+        Instruction {
+            program_id: w3b2_bridge_program::ID,
+            accounts,
+            data,
+        }
+    }
+}
+
+/// Helper functions specific to User actions.
+pub mod user {
+    use super::*;
+
+    /// Creates a UserProfile PDA linked to a specific admin.
+    pub fn create_profile(
+        svm: &mut LiteSVM,
+        authority: &Keypair,
+        comm_key: Pubkey,
+        target_admin: Pubkey,
+    ) -> Pubkey {
+        let (create_ix, user_pda) = ix_create_profile(authority, comm_key, target_admin);
+        common::build_and_send_tx(svm, vec![create_ix], authority, vec![]);
+        user_pda
+    }
+
+    /// A high-level function that handles updating the communication key for a UserProfile.
+    pub fn update_comm_key(
+        svm: &mut LiteSVM,
+        authority: &Keypair,
+        target_admin: Pubkey,
+        new_comm_key: Pubkey,
+    ) {
+        let update_ix = ix_update_comm_key(authority, target_admin, new_comm_key);
+        common::build_and_send_tx(svm, vec![update_ix], authority, vec![]);
+    }
+
+    /// Deposits lamports into a UserProfile PDA.
+    pub fn deposit(svm: &mut LiteSVM, authority: &Keypair, target_admin: Pubkey, amount: u64) {
+        let deposit_ix = ix_deposit(authority, target_admin, amount);
+        common::build_and_send_tx(svm, vec![deposit_ix], authority, vec![]);
+    }
+
+    pub fn close_profile(svm: &mut LiteSVM, authority: &Keypair, target_admin: Pubkey) {
+        let close_ix = ix_close_profile(authority, target_admin);
+        common::build_and_send_tx(svm, vec![close_ix], authority, vec![]);
+    }
+
+    fn ix_create_profile(
+        authority: &Keypair,
+        communication_pubkey: Pubkey,
+        target_admin: Pubkey,
+    ) -> (Instruction, Pubkey) {
+        let (user_pda, _) = Pubkey::find_program_address(
+            &[b"user", authority.pubkey().as_ref(), target_admin.as_ref()],
+            &w3b2_bridge_program::ID,
+        );
+
+        let data = w3b2_instruction::UserCreateProfile {
+            target_admin,
+            communication_pubkey,
+        }
+        .data();
+
+        let accounts = w3b2_accounts::UserCreateProfile {
+            authority: authority.pubkey(),
+            user_profile: user_pda,
+            system_program: system_program::id(),
+        }
+        .to_account_metas(None);
+
+        let ix = Instruction {
+            program_id: w3b2_bridge_program::ID,
+            accounts,
+            data,
+        };
+
+        (ix, user_pda)
+    }
+
+    /// A low-level helper to build the `user_update_comm_key` instruction.
+    fn ix_update_comm_key(
+        authority: &Keypair,
+        target_admin: Pubkey,
+        new_key: Pubkey,
+    ) -> Instruction {
+        let (user_pda, _) = Pubkey::find_program_address(
+            &[b"user", authority.pubkey().as_ref(), target_admin.as_ref()],
+            &w3b2_bridge_program::ID,
+        );
+
+        // The instruction needs both target_admin (for the Accounts macro) and the new_key.
+        let data = w3b2_instruction::UserUpdateCommKey {
+            target_admin,
+            new_key,
+        }
+        .data();
+
+        // The accounts context only needs the authority and the user profile to update.
+        let accounts = w3b2_accounts::UserUpdateCommKey {
+            authority: authority.pubkey(),
+            user_profile: user_pda,
+        }
+        .to_account_metas(None);
+
+        Instruction {
+            program_id: w3b2_bridge_program::ID,
+            accounts,
+            data,
+        }
+    }
+
+    /// A low-level helper to build the `user_close_profile` instruction.
+    fn ix_close_profile(authority: &Keypair, target_admin: Pubkey) -> Instruction {
+        // Find the PDA address for the profile to be closed.
+        let (user_pda, _) = Pubkey::find_program_address(
+            &[b"user", authority.pubkey().as_ref(), target_admin.as_ref()],
+            &w3b2_bridge_program::ID,
+        );
+
+        // This instruction needs target_admin to validate the PDA address.
+        let data = w3b2_instruction::UserCloseProfile { target_admin }.data();
+
+        // The accounts context requires the authority and the user profile to close.
+        let accounts = w3b2_accounts::UserCloseProfile {
+            authority: authority.pubkey(),
+            user_profile: user_pda,
+        }
+        .to_account_metas(None);
+
+        Instruction {
+            program_id: w3b2_bridge_program::ID,
+            accounts,
+            data,
+        }
+    }
+
+    fn ix_deposit(authority: &Keypair, target_admin: Pubkey, amount: u64) -> Instruction {
+        let (user_pda, _) = Pubkey::find_program_address(
+            &[b"user", authority.pubkey().as_ref(), target_admin.as_ref()],
+            &w3b2_bridge_program::ID,
+        );
+
+        let data = w3b2_instruction::UserDeposit { amount }.data();
+
+        let accounts = w3b2_accounts::UserDeposit {
+            authority: authority.pubkey(),
+            user_profile: user_pda,
             system_program: system_program::id(),
         }
         .to_account_metas(None);

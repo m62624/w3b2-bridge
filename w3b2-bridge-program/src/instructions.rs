@@ -35,9 +35,9 @@ pub fn admin_update_comm_key(ctx: Context<AdminUpdateCommKey>, new_key: Pubkey) 
     Ok(())
 }
 
-pub fn admin_close_profile(_ctx: Context<AdminCloseProfile>) -> Result<()> {
+pub fn admin_close_profile(ctx: Context<AdminCloseProfile>) -> Result<()> {
     emit!(AdminProfileClosed {
-        authority: _ctx.accounts.authority.key(),
+        authority: ctx.accounts.authority.key(),
         ts: Clock::get()?.unix_timestamp,
     });
     Ok(())

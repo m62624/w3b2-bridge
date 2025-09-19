@@ -76,6 +76,11 @@ pub mod w3b2_bridge_program {
         instructions::user_update_comm_key(ctx, target_admin, new_key)
     }
 
+    /// Closes the UserProfile and returns all lamports to the authority.
+    pub fn user_close_profile(ctx: Context<UserCloseProfile>, target_admin: Pubkey) -> Result<()> {
+        instructions::user_close_profile(ctx, target_admin)
+    }
+
     /// Deposits lamports from a user's ChainCard into their UserProfile PDA.
     pub fn user_deposit(ctx: Context<UserDeposit>, amount: u64) -> Result<()> {
         instructions::user_deposit(ctx, amount)

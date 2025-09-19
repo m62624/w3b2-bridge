@@ -185,7 +185,7 @@ pub struct UserCloseProfile<'info> {
     #[account(
         mut,
         close = authority,
-        seeds = [b"user", authority.key().as_ref(), target_admin.key().as_ref()],
+        seeds = [b"user", authority.key().as_ref(), target_admin.as_ref()],
         bump,
         constraint = user_profile.authority == authority.key() @ BridgeError::Unauthorized
     )]
