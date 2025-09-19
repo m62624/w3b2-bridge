@@ -25,74 +25,68 @@ pub mod w3b2_bridge_program {
 
     /// Creates an AdminProfile PDA to represent a service on the blockchain.
     /// This profile holds the service's authority, communication key, and price list.
-    pub fn register_admin_profile(
-        ctx: Context<RegisterAdminProfile>,
+    pub fn admin_register_profile(
+        ctx: Context<AdminRegisterProfile>,
         communication_pubkey: Pubkey,
     ) -> Result<()> {
-        instructions::register_admin_profile(ctx, communication_pubkey)
+        instructions::admin_register_profile(ctx, communication_pubkey)
+    }
+
+    /// Updates the off-chain communication public key for an admin.
+    pub fn admin_update_comm_key(ctx: Context<AdminUpdateCommKey>, new_key: Pubkey) -> Result<()> {
+        instructions::admin_update_comm_key(ctx, new_key)
+    }
+
+    /// Closes the AdminProfile and returns all lamports to the authority.
+    pub fn admin_close_profile(ctx: Context<AdminCloseProfile>) -> Result<()> {
+        instructions::admin_close_profile(ctx)
     }
 
     /// Updates the price list for an admin's services.
     /// The account is automatically resized to fit the new list.
-    pub fn update_admin_profile_prices(
-        ctx: Context<UpdateAdminProfilePrices>,
-        new_prices: UpdatePricesArgs,
+    pub fn admin_update_prices(
+        ctx: Context<AdminUpdatePrices>,
+        args: UpdatePricesArgs,
     ) -> Result<()> {
-        instructions::update_admin_profile_prices(ctx, new_prices)
-    }
-
-    /// Updates the off-chain communication public key for an admin.
-    pub fn update_admin_comm_key(ctx: Context<UpdateAdminCommKey>, new_key: Pubkey) -> Result<()> {
-        instructions::update_admin_comm_key(ctx, new_key)
+        instructions::admin_update_prices(ctx, args.new_prices)
     }
 
     /// Withdraws collected fees from the AdminProfile to a destination wallet.
-    pub fn admin_profile_withdraw(ctx: Context<AdminProfileWithdraw>, amount: u64) -> Result<()> {
-        instructions::admin_profile_withdraw(ctx, amount)
-    }
-
-    /// Closes the AdminProfile and returns all lamports to the authority.
-    pub fn close_admin_profile(ctx: Context<CloseAdminProfile>) -> Result<()> {
-        instructions::close_admin_profile(ctx)
+    pub fn admin_withdraw(ctx: Context<AdminWithdraw>, amount: u64) -> Result<()> {
+        instructions::admin_withdraw(ctx, amount)
     }
 
     // --- User Instructions ---
 
     /// Creates a UserProfile PDA, linking a user's ChainCard to a specific admin service.
-    pub fn create_user_profile(
-        ctx: Context<CreateUserProfile>,
+    pub fn user_create_profile(
+        ctx: Context<UserCreateProfile>,
         target_admin: Pubkey,
         communication_pubkey: Pubkey,
     ) -> Result<()> {
-        instructions::create_user_profile(ctx, target_admin, communication_pubkey)
+        instructions::user_create_profile(ctx, target_admin, communication_pubkey)
     }
 
     /// Updates the off-chain communication public key for a user.
-    pub fn update_user_comm_key(
-        ctx: Context<UpdateUserCommKey>,
+    pub fn user_update_comm_key(
+        ctx: Context<UserUpdateCommKey>,
         target_admin: Pubkey,
         new_key: Pubkey,
     ) -> Result<()> {
-        instructions::update_user_comm_key(ctx, target_admin, new_key)
+        instructions::user_update_comm_key(ctx, target_admin, new_key)
     }
 
     /// Deposits lamports from a user's ChainCard into their UserProfile PDA.
-    pub fn user_profile_deposit(ctx: Context<UserProfileDeposit>, amount: u64) -> Result<()> {
-        instructions::user_profile_deposit(ctx, amount)
+    pub fn user_deposit(ctx: Context<UserDeposit>, amount: u64) -> Result<()> {
+        instructions::user_deposit(ctx, amount)
     }
-
     /// Withdraws lamports from a user's UserProfile PDA to a destination wallet.
-    pub fn user_profile_withdraw(
-        ctx: Context<UserProfileWithdraw>,
+    pub fn user_withdraw(
+        ctx: Context<UserWithdraw>,
         amount: u64,
         target_admin: Pubkey,
     ) -> Result<()> {
-        instructions::user_profile_withdraw(ctx, amount, target_admin)
-    }
-
-    /// Closes a user's profile for a specific service and returns all lamports.
-    pub fn close_user_profile(ctx: Context<CloseUserProfile>, target_admin: Pubkey) -> Result<()> {
-        instructions::close_user_profile(ctx, target_admin)
+        instructions::user_withdraw(ctx, amount, target_admin)
     }
 
     // --- Operational Instructions ---

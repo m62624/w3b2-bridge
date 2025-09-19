@@ -19,21 +19,8 @@ pub struct AdminProfile {
     pub balance: u64,
 }
 
-/// Represents the on-chain profile for a User, linking them to a specific Admin.
-/// This PDA holds the user's authorization key and their deposit balance for the service.
-#[account]
-#[derive(Debug)]
-pub struct UserProfile {
-    /// The public key of the User's ChainCard. This is the sole authority for this profile.
-    pub authority: Pubkey,
-    /// Public key for off-chain communication encryption.
-    pub communication_pubkey: Pubkey,
-    /// The deposit balance for this user, used to pay for this specific admin's services.
-    pub deposit_balance: u64,
-}
-
 #[derive(Accounts)]
-pub struct RegisterAdminProfile<'info> {
+pub struct AdminRegisterProfile<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     #[account(
@@ -49,7 +36,7 @@ pub struct RegisterAdminProfile<'info> {
 
 #[derive(Accounts)]
 #[instruction(new_prices: Vec<(u64, u64)>)]
-pub struct UpdateAdminProfilePrices<'info> {
+pub struct AdminUpdatePrices<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     #[account(
@@ -71,7 +58,7 @@ pub struct UpdatePricesArgs {
 }
 
 #[derive(Accounts)]
-pub struct AdminProfileWithdraw<'info> {
+pub struct AdminWithdraw<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     #[account(
@@ -88,7 +75,7 @@ pub struct AdminProfileWithdraw<'info> {
 }
 
 #[derive(Accounts)]
-pub struct UpdateAdminCommKey<'info> {
+pub struct AdminUpdateCommKey<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     #[account(
@@ -102,7 +89,7 @@ pub struct UpdateAdminCommKey<'info> {
 
 
 #[derive(Accounts)]
-pub struct CloseAdminProfile<'info> {
+pub struct AdminCloseProfile<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     #[account(
@@ -115,9 +102,23 @@ pub struct CloseAdminProfile<'info> {
     pub admin_profile: Account<'info, AdminProfile>,
 }
 
+/// Represents the on-chain profile for a User, linking them to a specific Admin.
+/// This PDA holds the user's authorization key and their deposit balance for the service.
+#[account]
+#[derive(Debug)]
+pub struct UserProfile {
+    /// The public key of the User's ChainCard. This is the sole authority for this profile.
+    pub authority: Pubkey,
+    /// Public key for off-chain communication encryption.
+    pub communication_pubkey: Pubkey,
+    /// The deposit balance for this user, used to pay for this specific admin's services.
+    pub deposit_balance: u64,
+}
+
+
 #[derive(Accounts)]
 #[instruction(target_admin: Pubkey, communication_pubkey: Pubkey)] 
-pub struct CreateUserProfile<'info> {
+pub struct UserCreateProfile<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     #[account(
@@ -133,7 +134,7 @@ pub struct CreateUserProfile<'info> {
 }
 
 #[derive(Accounts)]
-pub struct UserProfileDeposit<'info> {
+pub struct UserDeposit<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     #[account(
@@ -146,7 +147,7 @@ pub struct UserProfileDeposit<'info> {
 
 #[derive(Accounts)]
 #[instruction(target_admin: Pubkey)]
-pub struct UserProfileWithdraw<'info> {
+pub struct UserWithdraw<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     #[account(
@@ -164,13 +165,12 @@ pub struct UserProfileWithdraw<'info> {
 
 #[derive(Accounts)]
 #[instruction(target_admin: Pubkey)]
-pub struct CloseUserProfile<'info> {
+pub struct UserUpdateCommKey<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     #[account(
         mut,
-        close = authority,
-        seeds = [b"user", authority.key().as_ref(), target_admin.key().as_ref()],
+        seeds = [b"user", authority.key().as_ref(), target_admin.as_ref()],
         bump,
         constraint = user_profile.authority == authority.key() @ BridgeError::Unauthorized
     )]
@@ -179,12 +179,13 @@ pub struct CloseUserProfile<'info> {
 
 #[derive(Accounts)]
 #[instruction(target_admin: Pubkey)]
-pub struct UpdateUserCommKey<'info> {
+pub struct UserCloseProfile<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     #[account(
         mut,
-        seeds = [b"user", authority.key().as_ref(), target_admin.as_ref()],
+        close = authority,
+        seeds = [b"user", authority.key().as_ref(), target_admin.key().as_ref()],
         bump,
         constraint = user_profile.authority == authority.key() @ BridgeError::Unauthorized
     )]

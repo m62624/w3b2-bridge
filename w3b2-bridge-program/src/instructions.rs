@@ -7,8 +7,8 @@ const MAX_PAYLOAD_SIZE: usize = 1024;
 
 // --- Admin Profile Instructions ---
 
-pub fn register_admin_profile(
-    ctx: Context<RegisterAdminProfile>,
+pub fn admin_register_profile(
+    ctx: Context<AdminRegisterProfile>,
     communication_pubkey: Pubkey,
 ) -> Result<()> {
     let admin_profile = &mut ctx.accounts.admin_profile;
@@ -25,20 +25,38 @@ pub fn register_admin_profile(
     Ok(())
 }
 
-pub fn update_admin_profile_prices(
-    ctx: Context<UpdateAdminProfilePrices>,
-    new_prices: UpdatePricesArgs,
-) -> Result<()> {
-    ctx.accounts.admin_profile.prices = new_prices.new_prices.clone();
-    emit!(AdminPricesUpdated {
+pub fn admin_update_comm_key(ctx: Context<AdminUpdateCommKey>, new_key: Pubkey) -> Result<()> {
+    ctx.accounts.admin_profile.communication_pubkey = new_key;
+    emit!(AdminCommKeyUpdated {
         authority: ctx.accounts.authority.key(),
-        new_prices: new_prices.new_prices,
+        new_comm_pubkey: new_key,
         ts: Clock::get()?.unix_timestamp,
     });
     Ok(())
 }
 
-pub fn admin_profile_withdraw(ctx: Context<AdminProfileWithdraw>, amount: u64) -> Result<()> {
+pub fn admin_close_profile(_ctx: Context<AdminCloseProfile>) -> Result<()> {
+    emit!(AdminProfileClosed {
+        authority: _ctx.accounts.authority.key(),
+        ts: Clock::get()?.unix_timestamp,
+    });
+    Ok(())
+}
+
+pub fn admin_update_prices(
+    ctx: Context<AdminUpdatePrices>,
+    new_prices: Vec<(u64, u64)>,
+) -> Result<()> {
+    ctx.accounts.admin_profile.prices = new_prices.clone();
+    emit!(AdminPricesUpdated {
+        authority: ctx.accounts.authority.key(),
+        new_prices,
+        ts: Clock::get()?.unix_timestamp,
+    });
+    Ok(())
+}
+
+pub fn admin_withdraw(ctx: Context<AdminWithdraw>, amount: u64) -> Result<()> {
     let admin_profile = &mut ctx.accounts.admin_profile;
     let authority = &ctx.accounts.authority;
     let destination = &ctx.accounts.destination;
@@ -84,27 +102,9 @@ pub fn admin_profile_withdraw(ctx: Context<AdminProfileWithdraw>, amount: u64) -
     Ok(())
 }
 
-pub fn close_admin_profile(_ctx: Context<CloseAdminProfile>) -> Result<()> {
-    emit!(AdminProfileClosed {
-        authority: _ctx.accounts.authority.key(),
-        ts: Clock::get()?.unix_timestamp,
-    });
-    Ok(())
-}
-
-pub fn update_admin_comm_key(ctx: Context<UpdateAdminCommKey>, new_key: Pubkey) -> Result<()> {
-    ctx.accounts.admin_profile.communication_pubkey = new_key;
-    emit!(AdminCommKeyUpdated {
-        authority: ctx.accounts.authority.key(),
-        new_comm_pubkey: new_key,
-        ts: Clock::get()?.unix_timestamp,
-    });
-    Ok(())
-}
-
 /// Creates a UserProfile PDA, linking a user's ChainCard to a specific admin service.
-pub fn create_user_profile(
-    ctx: Context<CreateUserProfile>,
+pub fn user_create_profile(
+    ctx: Context<UserCreateProfile>,
     target_admin: Pubkey,
     communication_pubkey: Pubkey,
 ) -> Result<()> {
@@ -122,7 +122,29 @@ pub fn create_user_profile(
     Ok(())
 }
 
-pub fn user_profile_deposit(ctx: Context<UserProfileDeposit>, amount: u64) -> Result<()> {
+pub fn user_update_comm_key(
+    ctx: Context<UserUpdateCommKey>,
+    _target_admin: Pubkey,
+    new_key: Pubkey,
+) -> Result<()> {
+    ctx.accounts.user_profile.communication_pubkey = new_key;
+    emit!(UserCommKeyUpdated {
+        authority: ctx.accounts.authority.key(),
+        new_comm_pubkey: new_key,
+        ts: Clock::get()?.unix_timestamp,
+    });
+    Ok(())
+}
+
+pub fn user_close_profile(_ctx: Context<UserCloseProfile>, _target_admin: Pubkey) -> Result<()> {
+    emit!(UserProfileClosed {
+        authority: _ctx.accounts.authority.key(),
+        ts: Clock::get()?.unix_timestamp,
+    });
+    Ok(())
+}
+
+pub fn user_deposit(ctx: Context<UserDeposit>, amount: u64) -> Result<()> {
     let user_profile = &mut ctx.accounts.user_profile;
 
     invoke(
@@ -149,11 +171,7 @@ pub fn user_profile_deposit(ctx: Context<UserProfileDeposit>, amount: u64) -> Re
     Ok(())
 }
 
-pub fn user_profile_withdraw(
-    ctx: Context<UserProfileWithdraw>,
-    amount: u64,
-    target_admin: Pubkey,
-) -> Result<()> {
+pub fn user_withdraw(ctx: Context<UserWithdraw>, amount: u64, target_admin: Pubkey) -> Result<()> {
     let user_profile = &mut ctx.accounts.user_profile;
     let authority = &ctx.accounts.authority;
     let destination = &ctx.accounts.destination;
@@ -205,13 +223,6 @@ pub fn user_profile_withdraw(
     Ok(())
 }
 
-pub fn close_user_profile(_ctx: Context<CloseUserProfile>, _target_admin: Pubkey) -> Result<()> {
-    emit!(UserProfileClosed {
-        authority: _ctx.accounts.authority.key(),
-        ts: Clock::get()?.unix_timestamp,
-    });
-    Ok(())
-}
 // --- Operational Instructions ---
 
 pub fn dispatch_command(
@@ -281,20 +292,6 @@ pub fn dispatch_command(
         command_id,
         price_paid: command_price,
         payload,
-        ts: Clock::get()?.unix_timestamp,
-    });
-    Ok(())
-}
-
-pub fn update_user_comm_key(
-    ctx: Context<UpdateUserCommKey>,
-    _target_admin: Pubkey,
-    new_key: Pubkey,
-) -> Result<()> {
-    ctx.accounts.user_profile.communication_pubkey = new_key;
-    emit!(UserCommKeyUpdated {
-        authority: ctx.accounts.authority.key(),
-        new_comm_pubkey: new_key,
         ts: Clock::get()?.unix_timestamp,
     });
     Ok(())
