@@ -74,14 +74,3 @@ pub struct CommandConfig {
     /// This could include things like API version, request type, or other metadata.
     pub meta: Vec<u8>,
 }
-
-/// `FundingStatus` represents the state of a `FundingRequest` PDA.
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
-pub enum FundingStatus {
-    /// The initial state of a request. The admin has not yet acted upon it.
-    Pending = 0,
-    /// The admin has approved the request and transferred the funds.
-    Approved = 1,
-    /// The admin has rejected the request. (Note: currently, the protocol only handles approval).
-    Rejected = 2,
-}
