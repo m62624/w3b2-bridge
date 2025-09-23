@@ -40,6 +40,17 @@ pub fn withdraw(svm: &mut LiteSVM, authority: &Keypair, destination: Pubkey, amo
     build_and_send_tx(svm, vec![withdraw_ix], authority, vec![]);
 }
 
+pub fn dispatch_command(
+    svm: &mut LiteSVM,
+    authority: &Keypair,
+    user_profile_pda: Pubkey,
+    command_id: u64,
+    payload: Vec<u8>,
+) {
+    let dispatch_ix = ix_dispatch_command(authority, user_profile_pda, command_id, payload);
+    build_and_send_tx(svm, vec![dispatch_ix], authority, vec![]);
+}
+
 /// A low-level helper to build the `admin_register_profile` instruction.
 fn ix_create_profile(authority: &Keypair, communication_pubkey: Pubkey) -> (Instruction, Pubkey) {
     // Derive the Program-Derived Address (PDA) for the new admin profile.
@@ -162,6 +173,37 @@ fn ix_withdraw(authority: &Keypair, destination: Pubkey, amount: u64) -> Instruc
         admin_profile: admin_pda,
         destination,
         system_program: system_program::id(),
+    }
+    .to_account_metas(None);
+
+    Instruction {
+        program_id: w3b2_bridge_program::ID,
+        accounts,
+        data,
+    }
+}
+
+fn ix_dispatch_command(
+    authority: &Keypair,
+    user_profile_pda: Pubkey,
+    command_id: u64,
+    payload: Vec<u8>,
+) -> Instruction {
+    let (admin_pda, _) = Pubkey::find_program_address(
+        &[b"admin", authority.pubkey().as_ref()],
+        &w3b2_bridge_program::ID,
+    );
+
+    let data = w3b2_instruction::AdminDispatchCommand {
+        command_id,
+        payload,
+    }
+    .data();
+
+    let accounts = w3b2_accounts::AdminDispatchCommand {
+        admin_authority: authority.pubkey(),
+        admin_profile: admin_pda,
+        user_profile: user_profile_pda,
     }
     .to_account_metas(None);
 
