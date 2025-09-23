@@ -1,4 +1,9 @@
-// tests/user.rs
+//! This module contains all integration tests for User-related instructions.
+//!
+//! The tests follow a standard Arrange-Act-Assert pattern:
+//! 1.  **Arrange:** Set up the initial on-chain state (create admins, users, fund wallets).
+//! 2.  **Act:** Execute the single instruction being tested.
+//! 3.  **Assert:** Fetch the resulting on-chain state and verify that it matches the expected outcome.
 
 mod instructions;
 
@@ -7,9 +12,26 @@ use instructions::*;
 use solana_program::native_token::LAMPORTS_PER_SOL;
 use solana_program::sysvar::rent::Rent;
 use solana_sdk::signature::Signer;
-use w3b2_bridge_program::state::AdminProfile;
-use w3b2_bridge_program::state::UserProfile;
+use w3b2_bridge_program::state::{AdminProfile, UserProfile};
 
+/// Tests the successful creation of a `UserProfile` PDA.
+///
+/// ### Scenario
+/// A new user wants to register with a service (Admin) that already exists on the protocol.
+///
+/// ### Arrange
+/// 1. An `AdminProfile` is created.
+/// 2. A new `Keypair` is created and funded to act as the user's `ChainCard` (`user_authority`).
+/// 3. A `Keypair` is created for the user's off-chain communication key.
+///
+/// ### Act
+/// The `user::create_profile` helper is called, creating the on-chain `UserProfile` PDA.
+///
+/// ### Assert
+/// 1. The `authority` field in the new `UserProfile` matches the user's `ChainCard` public key.
+/// 2. The `communication_pubkey` field is set correctly.
+/// 3. The initial `deposit_balance` is 0.
+/// 4. The account's lamport balance is exactly the rent-exempt minimum for its size.
 #[test]
 fn test_user_create_profile_success() {
     // === 1. Arrange ===
@@ -37,13 +59,10 @@ fn test_user_create_profile_success() {
     println!("User profile created successfully at: {}", user_pda);
 
     // === 3. Assert ===
-
-    // Fetch and deserialize the new user profile account.
     let user_account_data = svm.get_account(&user_pda).unwrap();
     let user_profile =
         UserProfile::try_deserialize(&mut user_account_data.data.as_slice()).unwrap();
 
-    // Verify the on-chain state was set correctly.
     assert_eq!(user_profile.authority, user_authority.pubkey());
     assert_eq!(user_profile.communication_pubkey, user_comm_key.pubkey());
     assert_eq!(
@@ -51,11 +70,9 @@ fn test_user_create_profile_success() {
         "Deposit balance should be 0 on initialization"
     );
 
-    // Verify the account's lamport balance is the rent-exempt minimum.
     let rent = Rent::default();
     let space = 8 + std::mem::size_of::<UserProfile>();
     let rent_exempt_minimum = rent.minimum_balance(space);
-
     assert_eq!(user_account_data.lamports, rent_exempt_minimum);
 
     println!("✅ Create User Profile Test Passed!");
@@ -66,18 +83,29 @@ fn test_user_create_profile_success() {
     );
 }
 
-// In tests/user.rs
-
+/// Tests the successful update of a `UserProfile`'s communication key.
+///
+/// ### Scenario
+/// A user with an existing profile wants to change their key for off-chain communication.
+///
+/// ### Arrange
+/// 1. An `AdminProfile` and a `UserProfile` are created with an initial communication key.
+/// 2. A new `Keypair` is generated for the new communication key.
+///
+/// ### Act
+/// The `user::update_comm_key` helper is called.
+///
+/// ### Assert
+/// 1. The `communication_pubkey` field in the `UserProfile` is updated to the new key.
+/// 2. The other fields (`authority`, `deposit_balance`) remain unchanged.
 #[test]
 fn test_user_update_comm_key_success() {
     // === 1. Arrange ===
     let mut svm = setup_svm();
 
-    // Create an admin for the user to be linked to.
     let admin_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let admin_pda = admin::create_profile(&mut svm, &admin_authority, create_keypair().pubkey());
 
-    // Create the user with an initial communication key.
     let user_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let initial_comm_key = create_keypair();
     let user_pda = user::create_profile(
@@ -87,29 +115,19 @@ fn test_user_update_comm_key_success() {
         admin_pda,
     );
 
-    // Define the new key we want to update to.
     let new_comm_key = create_keypair();
 
     // === 2. Act ===
     println!("Updating user communication key...");
-
-    // Call our new helper function to send the update transaction.
     user::update_comm_key(&mut svm, &user_authority, admin_pda, new_comm_key.pubkey());
 
     // === 3. Assert ===
-
-    // Fetch the account state AGAIN to see the changes.
     let user_account_data = svm.get_account(&user_pda).unwrap();
     let user_profile =
         UserProfile::try_deserialize(&mut user_account_data.data.as_slice()).unwrap();
 
-    // The main assertion: check if the key was updated.
     assert_eq!(user_profile.communication_pubkey, new_comm_key.pubkey());
-
-    // Also, ensure the old key is no longer there.
     assert_ne!(user_profile.communication_pubkey, initial_comm_key.pubkey());
-
-    // Sanity check: ensure other fields were not changed.
     assert_eq!(user_profile.authority, user_authority.pubkey());
     assert_eq!(user_profile.deposit_balance, 0);
 
@@ -118,16 +136,30 @@ fn test_user_update_comm_key_success() {
     println!("   -> New Key: {}", user_profile.communication_pubkey);
 }
 
+/// Tests the successful closure of a `UserProfile` account.
+///
+/// ### Scenario
+/// A user decides to stop using a service and closes their profile to recover the rent lamports.
+///
+/// ### Arrange
+/// 1. An `AdminProfile` and `UserProfile` are created.
+/// 2. The lamport balances of the user's `ChainCard` and the `UserProfile` PDA are recorded.
+///
+/// ### Act
+/// The `user::close_profile` helper is called.
+///
+/// ### Assert
+/// 1. The `UserProfile` PDA account no longer exists.
+/// 2. The balance of the user's `ChainCard` (`authority`) has increased by the lamport
+///    balance of the closed PDA, minus the transaction fee.
 #[test]
 fn test_user_close_profile_success() {
     // === 1. Arrange ===
     let mut svm = setup_svm();
 
-    // Create an admin for the user to be linked to.
     let admin_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let admin_pda = admin::create_profile(&mut svm, &admin_authority, create_keypair().pubkey());
 
-    // Create the user profile that we are going to close.
     let user_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let user_pda = user::create_profile(
         &mut svm,
@@ -136,7 +168,6 @@ fn test_user_close_profile_success() {
         admin_pda,
     );
 
-    // Get balances *after* creation but *before* closing.
     let pda_balance = svm.get_balance(&user_pda).unwrap();
     let authority_balance_before = svm.get_balance(&user_authority.pubkey()).unwrap();
 
@@ -146,16 +177,11 @@ fn test_user_close_profile_success() {
     println!("Profile closed.");
 
     // === 3. Assert ===
-
-    // Assertion 1: The user profile account should no longer exist.
     let closed_account = svm.get_account(&user_pda);
     assert!(closed_account.is_none(), "Account was not closed!");
 
-    // Assertion 2: The authority's balance should be refunded the rent money,
-    // minus the transaction fee for the close operation (5000 lamports).
     let authority_balance_after = svm.get_balance(&user_authority.pubkey()).unwrap();
     let expected_balance = authority_balance_before + pda_balance - 5000;
-
     assert_eq!(authority_balance_after, expected_balance);
 
     println!("✅ Close User Profile Test Passed!");
@@ -165,18 +191,30 @@ fn test_user_close_profile_success() {
     );
 }
 
-// In tests/user.rs
-
+/// Tests the successful deposit of funds into a `UserProfile`.
+///
+/// ### Scenario
+/// A user pre-funds their profile to pay for future services from an admin.
+///
+/// ### Arrange
+/// 1. An `AdminProfile` and `UserProfile` are created.
+/// 2. The balances of the user's `ChainCard` and the `UserProfile` PDA are recorded.
+///
+/// ### Act
+/// The `user::deposit` helper is called to transfer lamports.
+///
+/// ### Assert
+/// 1. The `deposit_balance` field inside the `UserProfile` is correctly incremented.
+/// 2. The on-chain lamport balance of the `UserProfile` PDA increases by the deposit amount.
+/// 3. The balance of the user's `ChainCard` (`authority`) decreases by the deposit amount, plus the transaction fee.
 #[test]
 fn test_user_deposit_success() {
     // === 1. Arrange ===
     let mut svm = setup_svm();
 
-    // Create an admin for the user to be linked to.
     let admin_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let admin_pda = admin::create_profile(&mut svm, &admin_authority, create_keypair().pubkey());
 
-    // Create the user profile. Initially, its deposit_balance is 0.
     let user_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let user_pda = user::create_profile(
         &mut svm,
@@ -185,7 +223,6 @@ fn test_user_deposit_success() {
         admin_pda,
     );
 
-    // Get the state *before* the deposit.
     let authority_balance_before = svm.get_balance(&user_authority.pubkey()).unwrap();
     let pda_lamports_before = svm.get_balance(&user_pda).unwrap();
 
@@ -193,31 +230,23 @@ fn test_user_deposit_success() {
 
     // === 2. Act ===
     println!("User depositing {} lamports...", deposit_amount);
-
-    // Call the deposit helper function.
     user::deposit(&mut svm, &user_authority, admin_pda, deposit_amount);
-
     println!("Deposit successful.");
 
     // === 3. Assert ===
-
-    // Fetch the final state of the user profile and the authority's wallet.
     let user_account_data_after = svm.get_account(&user_pda).unwrap();
     let user_profile_after =
         UserProfile::try_deserialize(&mut user_account_data_after.data.as_slice()).unwrap();
     let authority_balance_after = svm.get_balance(&user_authority.pubkey()).unwrap();
 
-    // Assertion 1: The internal `deposit_balance` field was correctly updated.
     assert_eq!(user_profile_after.deposit_balance, deposit_amount);
 
-    // Assertion 2: The PDA's on-chain lamport balance correctly increased.
     assert_eq!(
         user_account_data_after.lamports,
         pda_lamports_before + deposit_amount
     );
 
-    // Assertion 3: The authority's (ChainCard) balance correctly decreased.
-    let expected_authority_balance = authority_balance_before - deposit_amount - 5000; // 5000 for tx fee
+    let expected_authority_balance = authority_balance_before - deposit_amount - 5000;
     assert_eq!(authority_balance_after, expected_authority_balance);
 
     println!("✅ User Deposit Test Passed!");
@@ -231,16 +260,31 @@ fn test_user_deposit_success() {
     );
 }
 
+/// Tests the successful withdrawal of funds from a `UserProfile`.
+///
+/// ### Scenario
+/// A user withdraws their unspent deposit from a service profile to a different wallet.
+///
+/// ### Arrange
+/// 1. An `AdminProfile` and `UserProfile` are created.
+/// 2. The user deposits funds into their profile.
+/// 3. A new `destination_wallet` is created.
+///
+/// ### Act
+/// The `user::withdraw` helper is called.
+///
+/// ### Assert
+/// 1. The `deposit_balance` field in the `UserProfile` is correctly decremented.
+/// 2. The on-chain lamport balance of the `UserProfile` PDA decreases by the withdrawal amount.
+/// 3. The lamport balance of the `destination_wallet` increases by the withdrawal amount.
 #[test]
 fn test_user_withdraw_success() {
     // === 1. Arrange ===
     let mut svm = setup_svm();
 
-    // Create an admin for the user to be linked to.
     let admin_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let admin_pda = admin::create_profile(&mut svm, &admin_authority, create_keypair().pubkey());
 
-    // Create the user profile.
     let user_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let user_pda = user::create_profile(
         &mut svm,
@@ -249,21 +293,13 @@ fn test_user_withdraw_success() {
         admin_pda,
     );
 
-    // The user deposits funds into their profile.
     let deposit_amount = 2 * LAMPORTS_PER_SOL;
     user::deposit(&mut svm, &user_authority, admin_pda, deposit_amount);
 
-    // Create a destination wallet to receive the withdrawn funds.
     let destination_wallet = create_keypair();
 
-    // Get the state *before* the withdrawal.
     let pda_lamports_before = svm.get_balance(&user_pda).unwrap();
-
-    //
-    // FIX: A new keypair has no on-chain account, so its balance is conceptually 0.
-    //
-    let destination_balance_before = 0; // <-- ИЗМЕНЕНИЕ ЗДЕСЬ
-
+    let destination_balance_before = 0;
     let withdraw_amount = 1 * LAMPORTS_PER_SOL;
 
     // === 2. Act ===
@@ -278,24 +314,19 @@ fn test_user_withdraw_success() {
     println!("Withdrawal successful.");
 
     // === 3. Assert ===
-
-    // Fetch the final state of the user profile and destination wallet.
     let user_account_data_after = svm.get_account(&user_pda).unwrap();
     let user_profile_after =
         UserProfile::try_deserialize(&mut user_account_data_after.data.as_slice()).unwrap();
     let destination_balance_after = svm.get_balance(&destination_wallet.pubkey()).unwrap();
 
-    // Assertion 1: The internal `deposit_balance` was correctly updated.
     let expected_deposit_balance = deposit_amount - withdraw_amount;
     assert_eq!(user_profile_after.deposit_balance, expected_deposit_balance);
 
-    // Assertion 2: The PDA's on-chain lamport balance correctly decreased.
     assert_eq!(
         user_account_data_after.lamports,
         pda_lamports_before - withdraw_amount
     );
 
-    // Assertion 3: The destination wallet's balance correctly increased.
     assert_eq!(
         destination_balance_after,
         destination_balance_before + withdraw_amount
@@ -312,12 +343,30 @@ fn test_user_withdraw_success() {
     );
 }
 
+/// Tests the successful execution of a paid command from a user to an admin.
+///
+/// ### Scenario
+/// This is the primary use case of the protocol. A user pays a service (Admin) for an
+/// off-chain action by calling the `user_dispatch_command` instruction.
+///
+/// ### Arrange
+/// 1. An `AdminProfile` is created.
+/// 2. The Admin sets a price for a specific `command_id`.
+/// 3. A `UserProfile` is created and linked to the admin.
+/// 4. The user deposits enough funds to cover the command price.
+/// 5. The initial state of both the user and admin profiles are recorded.
+///
+/// ### Act
+/// The `user::dispatch_command` helper is called.
+///
+/// ### Assert
+/// 1. The user's `deposit_balance` and on-chain lamports decrease by the command price.
+/// 2. The admin's `balance` and on-chain lamports increase by the command price.
 #[test]
 fn test_user_dispatch_command_success() {
     // === 1. Arrange ===
     let mut svm = setup_svm();
 
-    // -- Создаем Админа и устанавливаем цену за команду №1 --
     let admin_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let admin_pda = admin::create_profile(&mut svm, &admin_authority, create_keypair().pubkey());
     let command_id_to_call = 1;
@@ -328,7 +377,6 @@ fn test_user_dispatch_command_success() {
         vec![(command_id_to_call, command_price)],
     );
 
-    // -- Создаем Пользователя и пополняем его баланс --
     let user_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let user_pda = user::create_profile(
         &mut svm,
@@ -339,7 +387,6 @@ fn test_user_dispatch_command_success() {
     let deposit_amount = 2 * LAMPORTS_PER_SOL;
     user::deposit(&mut svm, &user_authority, admin_pda, deposit_amount);
 
-    // -- Сохраняем состояние всех счетов *перед* вызовом команды --
     let user_pda_lamports_before = svm.get_balance(&user_pda).unwrap();
     let admin_pda_lamports_before = svm.get_balance(&admin_pda).unwrap();
 
@@ -354,12 +401,11 @@ fn test_user_dispatch_command_success() {
         &user_authority,
         admin_pda,
         command_id_to_call,
-        vec![1, 2, 3], // Произвольный payload
+        vec![1, 2, 3], // Arbitrary payload
     );
     println!("Command dispatched successfully.");
 
     // === 3. Assert ===
-    // -- Получаем финальное состояние всех счетов --
     let user_account_after = svm.get_account(&user_pda).unwrap();
     let user_profile_after =
         UserProfile::try_deserialize(&mut user_account_after.data.as_slice()).unwrap();
@@ -368,25 +414,21 @@ fn test_user_dispatch_command_success() {
     let admin_profile_after =
         AdminProfile::try_deserialize(&mut admin_account_after.data.as_slice()).unwrap();
 
-    // -- Проверяем балансы пользователя --
-    // Assertion 1: Внутренний баланс пользователя уменьшился на цену команды
+    // Assert user balances
     assert_eq!(
         user_profile_after.deposit_balance,
         deposit_amount - command_price
     );
-    // Assertion 2: Общий баланс лампортов PDA пользователя уменьшился
     assert_eq!(
         user_account_after.lamports,
         user_pda_lamports_before - command_price
     );
 
-    // -- Проверяем балансы админа --
-    // Assertion 3: Внутренний баланс админа увеличился на цену команды
+    // Assert admin balances
     assert_eq!(
         admin_profile_after.balance,
         admin_profile_before.balance + command_price
     );
-    // Assertion 4: Общий баланс лампортов PDA админа увеличился
     assert_eq!(
         admin_account_after.lamports,
         admin_pda_lamports_before + command_price

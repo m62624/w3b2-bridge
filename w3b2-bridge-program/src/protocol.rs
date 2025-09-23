@@ -1,76 +1,72 @@
-use super::*;
+use anchor_lang::prelude::*;
 
 /*
-    This file defines the core data structures used for communication within the W3B2 protocol.
-    These structs are primarily for off-chain use by the client (e.g., a TypeScript frontend)
-    and the server (`w3b2-connector`).
+    This file defines serializable data structures intended for off-chain communication.
+    The on-chain program does not interpret the content of the `payload` in the `dispatch`
+    instructions. It treats it as an opaque byte array (`Vec<u8>`).
 
-    The on-chain program (`dispatch_command` instruction) does not interpret these structs directly.
-    Instead, it treats them as an opaque byte array (`Vec<u8>`) in the `payload`. The client
-    serializes a struct (like `CommandConfig`) into this byte array, and the off-chain server
-    deserializes it upon receiving the `CommandEvent`.
-
-    This approach keeps the on-chain logic minimal and gas-efficient, acting as a secure message
-    broker, while allowing for complex and flexible off-chain communication protocols.
+    This design pattern turns the Solana blockchain into a secure, decentralized, and
+    auditable message broker. Off-chain components (like the `w3b2-connector`) are
+    responsible for serializing these structs into the `payload` and deserializing them
+    from the corresponding on-chain events. This keeps the on-chain logic minimal and
+    gas-efficient while allowing for arbitrarily complex off-chain protocols.
 */
 
-/// `CommandMode` defines the expected behavior for an off-chain service after receiving a command.
-/// It is passed within the `dispatch_command` instruction and included in the `CommandEvent`.
+/// Defines the expected communication flow for an off-chain service after
+/// receiving a command via a `dispatch` instruction.
 #[derive(AnchorSerialize, AnchorDeserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandMode {
-    /// Indicates a two-step operation. The off-chain service is expected to process the request
-    /// and then send a response back to the blockchain, typically via another `dispatch_command`.
+    /// The off-chain service is expected to process the command and subsequently
+    /// initiate a new on-chain transaction (e.g., `admin_dispatch_command`) to
+    /// send a response. This creates a two-step, verifiable interaction.
     RequestResponse = 0,
-    /// Indicates a one-way "fire-and-forget" operation. The off-chain service executes the
-    /// action, but no on-chain response is expected.
+    /// The on-chain command is the final step in the sequence. The off-chain service
+    /// executes the requested action, but no on-chain response is expected.
     OneWay = 1,
 }
 
-// NOTE: `CommandRecord` struct has been removed.
-// It was redundant because the `CommandEvent` emitted by the `dispatch_command` instruction
-// serves the exact same purpose: to log the command details (sender, target, payload, etc.)
-// on the blockchain immutably. Relying on the event simplifies the protocol and avoids
-// storing duplicate information.
-
-/// `Destination` specifies the network endpoint for the off-chain service.
-/// This is a crucial part of `CommandConfig` when establishing a direct, secure connection.
+/// Defines a network endpoint for an off-chain service. This allows one party to
+/// inform another where to connect for direct, off-chain communication, using the
+/// blockchain as the secure introduction mechanism.
 #[derive(AnchorSerialize, AnchorDeserialize, Debug, Clone, PartialEq, Eq)]
 pub enum Destination {
-    /// An IPv4 address and a port number.
+    /// An IPv4 address and a port number for direct socket connections.
     IpV4([u8; 4], u16),
-    /// An IPv6 address and a port number.
+    /// An IPv6 address and a port number for direct socket connections.
     IpV6([u8; 16], u16),
-    /// A fully qualified URL string (e.g., "https://api.example.com").
-    /// The string is prefixed with its length for Borsh serialization.
+    /// A fully qualified URL string for higher-level protocols (e.g., HTTPS, WSS).
+    /// The string is length-prefixed for reliable Borsh serialization.
     Url(String),
 }
 
-/// `CommandConfig` is the primary structure for initiating a secure off-chain session.
-/// A client creates an instance of this struct, serializes it into Borsh format,
-/// and sends it as the `payload` of a `dispatch_command` instruction.
+/// A structured message for initiating a secure, stateful off-chain communication session.
 ///
-/// This is the "agenda" for the meeting, as described in the protocol flow.
+/// It is typically serialized and passed in the `payload` of a `dispatch_command`.
+/// It serves as the "handshake" to establish a direct, encrypted channel.
 #[derive(AnchorSerialize, AnchorDeserialize, Debug, Clone, PartialEq, Eq)]
 pub struct CommandConfig {
-    /// A unique identifier for the communication session, typically a nonce or a timestamp-based u64.
-    /// This ID is used in subsequent `log_action` calls to link all related off-chain activities
-    /// to this initial session request.
+    /// A unique identifier for the off-chain session. All subsequent on-chain
+    /// (`log_action`) and off-chain activities related to this interaction should be
+    /// tagged with this ID for correlation and auditing.
     pub session_id: u64,
 
-    /// The encrypted AES-256 session key, which will be used for symmetric encryption
-    /// of the actual data transferred over the direct HTTP channel.
+    /// A variable-length byte array containing the encrypted session key.
+    /// The method of encryption and the format of this field are NOT defined by the
+    /// on-chain protocol; they should be agreed upon by the off-chain participants.
     ///
-    /// The encryption process (hybrid encryption) is as follows:
-    /// 1. A new, ephemeral X25519 keypair is generated.
-    /// 2. A shared secret is derived using the ephemeral private key and the recipient's public `communication_pubkey`.
-    /// 3. The shared secret is used to encrypt the 32-byte AES-256 session key.
-    /// 4. The final 80-byte block consists of: [ephemeral public key (32) | ciphertext (32) | AEAD tag (16)].
-    pub encrypted_session_key: [u8; 80],
+    /// It is EXPECTED that this payload is asymmetrically encrypted using a key
+    /// agreement scheme (like X25519 or ECDH) with the recipient's on-chain
+    /// `communication_pubkey`. This enables a secure key exchange, establishing
+    /// an encrypted channel for direct off-chain communication.
+    // CHANGED: from `[u8; 80]` to `Vec<u8>` for flexibility.
+    pub encrypted_session_key: Vec<u8>,
 
-    /// The network address where the client expects the off-chain service to connect.
+    /// The network endpoint where the initiator of the command expects the
+    /// recipient to connect for the off-chain part of the session.
     pub destination: Destination,
 
-    /// An optional, flexible field for any additional application-specific data.
-    /// This could include things like API version, request type, or other metadata.
+    /// A flexible, general-purpose byte array for any additional metadata
+    /// required by the specific off-chain protocol. This could include protocol
+    /// versioning, initial commands, or other setup data.
     pub meta: Vec<u8>,
 }

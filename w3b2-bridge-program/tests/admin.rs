@@ -1,3 +1,10 @@
+//! This module contains all integration tests for Admin-related instructions.
+//!
+//! The tests follow a standard Arrange-Act-Assert pattern:
+//! 1.  **Arrange:** Set up the initial on-chain state (create admins, users, fund wallets).
+//! 2.  **Act:** Execute the single instruction being tested.
+//! 3.  **Assert:** Fetch the resulting on-chain state and verify that it matches the expected outcome.
+
 mod instructions;
 
 use anchor_lang::AccountDeserialize;
@@ -7,40 +14,40 @@ use solana_program::sysvar::rent::Rent;
 use solana_sdk::signature::Signer;
 use w3b2_bridge_program::state::{AdminProfile, UserProfile};
 
+/// Tests the successful creation of an `AdminProfile` PDA.
+///
+/// ### Scenario
+/// A new service provider registers their profile on the protocol.
+///
+/// ### Arrange
+/// 1. A new `Keypair` is created and funded to act as the admin's `ChainCard` (`authority`).
+/// 2. A `Keypair` is created for the admin's off-chain communication key.
+///
+/// ### Act
+/// The `admin::create_profile` helper is called to initialize the on-chain `AdminProfile` PDA.
+///
+/// ### Assert
+/// 1. The `authority` and `communication_pubkey` fields in the new `AdminProfile` are set correctly.
+/// 2. The `prices` vector is empty and the `balance` is 0.
+/// 3. The account's lamport balance is exactly the rent-exempt minimum for its initial allocated size.
 #[test]
 fn test_admin_create_profile_success() {
     // === 1. Arrange (Setup) ===
-
-    // Initialize the Solana virtual machine and load our program.
     let mut svm = setup_svm();
 
-    // Create a new keypair and fund it with 10 SOL. This keypair will act
-    // as the `authority` for the new admin profile and pay for the transaction.
     let authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
-
-    // Create a separate keypair to simulate the off-chain communication key.
     let comm_key = create_keypair();
 
     // === 2. Act (Execution) ===
-
     println!("Attempting to create admin profile...");
-
-    // Call our high-level helper function to create the profile.
-    // This single call builds the instruction, sends the transaction, and returns the PDA.
     let admin_pda = admin::create_profile(&mut svm, &authority, comm_key.pubkey());
-
     println!("Admin profile created successfully at: {}", admin_pda);
 
     // === 3. Assert (Verification) ===
-
-    // Fetch the newly created account's data from the SVM.
     let admin_account_data = svm.get_account(&admin_pda).unwrap();
-
-    // Deserialize the raw account data into our `AdminProfile` struct.
     let admin_profile =
         AdminProfile::try_deserialize(&mut admin_account_data.data.as_slice()).unwrap();
 
-    // Verify that the on-chain state was set correctly.
     assert_eq!(admin_profile.authority, authority.pubkey());
     assert_eq!(admin_profile.communication_pubkey, comm_key.pubkey());
     assert!(
@@ -52,12 +59,9 @@ fn test_admin_create_profile_success() {
         "Balance should be 0 on initialization"
     );
 
-    // Verify that the account's lamport balance is exactly the rent-exempt minimum
-    // for the space we allocated in the `AdminRegisterProfile` context.
     let rent = Rent::default();
     let space = 8 + std::mem::size_of::<AdminProfile>() + (10 * std::mem::size_of::<(u64, u64)>());
     let rent_exempt_minimum = rent.minimum_balance(space);
-
     assert_eq!(admin_account_data.lamports, rent_exempt_minimum);
 
     println!("✅ Assertions passed!");
@@ -68,42 +72,46 @@ fn test_admin_create_profile_success() {
     );
 }
 
+/// Tests the successful update of an `AdminProfile`'s communication key.
+///
+/// ### Scenario
+/// An admin with an existing profile wants to change their key for off-chain communication.
+///
+/// ### Arrange
+/// 1. An `AdminProfile` is created with an initial communication key.
+/// 2. A new `Keypair` is generated for the new communication key.
+///
+/// ### Act
+/// The `admin::update_comm_key` helper is called.
+///
+/// ### Assert
+/// 1. The `communication_pubkey` field in the `AdminProfile` is updated to the new key.
+/// 2. Other fields, like `authority`, remain unchanged.
 #[test]
 fn test_admin_update_comm_key_success() {
     // === 1. Arrange ===
     let mut svm = setup_svm();
     let authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
 
-    // Create the profile with an initial key.
     let initial_comm_key = create_keypair();
     let admin_pda = admin::create_profile(&mut svm, &authority, initial_comm_key.pubkey());
 
-    // Define the new key we want to update to.
     let new_comm_key = create_keypair();
 
     // === 2. Act ===
     println!("Updating communication key...");
-
-    // Call our new helper function to send the update transaction.
     admin::update_comm_key(&mut svm, &authority, new_comm_key.pubkey());
 
     // === 3. Assert ===
-
-    // Fetch the account state AGAIN to see the changes.
     let admin_account_data = svm.get_account(&admin_pda).unwrap();
     let admin_profile =
         AdminProfile::try_deserialize(&mut admin_account_data.data.as_slice()).unwrap();
 
-    // The main assertion: check if the key was updated.
     assert_eq!(admin_profile.communication_pubkey, new_comm_key.pubkey());
-
-    // Also, ensure the old key is no longer there.
     assert_ne!(
         admin_profile.communication_pubkey,
         initial_comm_key.pubkey()
     );
-
-    // Sanity check: ensure other fields were not changed.
     assert_eq!(admin_profile.authority, authority.pubkey());
 
     println!("✅ Update Comm Key Test Passed!");
@@ -111,6 +119,22 @@ fn test_admin_update_comm_key_success() {
     println!("   -> New Key: {}", admin_profile.communication_pubkey);
 }
 
+/// Tests the successful closure of an `AdminProfile` account.
+///
+/// ### Scenario
+/// An admin unregisters their service and recovers the rent lamports held by the PDA.
+///
+/// ### Arrange
+/// 1. An `AdminProfile` is created.
+/// 2. The lamport balances of the admin's `ChainCard` and the `AdminProfile` PDA are recorded.
+///
+/// ### Act
+/// The `admin::close_profile` helper is called.
+///
+/// ### Assert
+/// 1. The `AdminProfile` PDA account no longer exists.
+/// 2. The balance of the admin's `ChainCard` (`authority`) has increased by the lamport
+///    balance of the closed PDA, minus the transaction fee.
 #[test]
 fn test_admin_close_profile_success() {
     // === 1. Arrange ===
@@ -118,11 +142,8 @@ fn test_admin_close_profile_success() {
     let authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let comm_key = create_keypair();
 
-    // Create a profile that we can then close.
     let admin_pda = admin::create_profile(&mut svm, &authority, comm_key.pubkey());
 
-    // Get the balances before the action.
-    // The PDA balance is the rent-exempt minimum that should be returned.
     let pda_balance = svm.get_balance(&admin_pda).unwrap();
     let authority_balance_before = svm.get_balance(&authority.pubkey()).unwrap();
 
@@ -132,16 +153,11 @@ fn test_admin_close_profile_success() {
     println!("Profile closed.");
 
     // === 3. Assert ===
-
-    // Assertion 1: The admin profile account should no longer exist.
     let closed_account = svm.get_account(&admin_pda);
     assert!(closed_account.is_none(), "Account was not closed!");
 
-    // Assertion 2: The authority's balance should have increased by the PDA's balance.
-    // We also account for the transaction fee (5000 lamports in LiteSVM).
     let authority_balance_after = svm.get_balance(&authority.pubkey()).unwrap();
     let expected_balance = authority_balance_before + pda_balance - 5000;
-
     assert_eq!(authority_balance_after, expected_balance);
 
     println!("✅ Close Profile Test Passed!");
@@ -151,6 +167,21 @@ fn test_admin_close_profile_success() {
     );
 }
 
+/// Tests the successful update of an admin's price list and the `realloc` feature.
+///
+/// ### Scenario
+/// An admin sets or changes the prices for their services, which requires resizing the PDA.
+///
+/// ### Arrange
+/// 1. An `AdminProfile` is created with an empty price list.
+/// 2. A new price list is defined.
+///
+/// ### Act
+/// The `admin::update_prices` helper is called.
+///
+/// ### Assert
+/// 1. The `prices` vector in the account data is updated correctly.
+/// 2. The on-chain account size (`data.len()`) has changed to accommodate the new vector size.
 #[test]
 fn test_admin_update_prices_success() {
     // === 1. Arrange ===
@@ -158,13 +189,10 @@ fn test_admin_update_prices_success() {
     let authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let comm_key = create_keypair();
 
-    // Create a profile. Initially, its `prices` vector is empty.
     let admin_pda = admin::create_profile(&mut svm, &authority, comm_key.pubkey());
 
-    // Define the new price list we want to set.
     let new_prices = vec![(1, 1000), (2, 2500), (5, 10000)];
 
-    // Get the account size before the update to verify realloc works.
     let account_before = svm.get_account(&admin_pda).unwrap();
     let size_before = account_before.data.len();
 
@@ -174,19 +202,14 @@ fn test_admin_update_prices_success() {
     println!("Prices updated.");
 
     // === 3. Assert ===
-
-    // Fetch the account state AGAIN to see the changes.
     let account_after = svm.get_account(&admin_pda).unwrap();
     let size_after = account_after.data.len();
     let admin_profile = AdminProfile::try_deserialize(&mut account_after.data.as_slice()).unwrap();
 
-    // Assertion 1: The `prices` field should now contain our new data.
     assert_eq!(admin_profile.prices, new_prices);
 
-    // Assertion 2: The account data size should have changed due to `realloc`.
     let base_size = 8 + std::mem::size_of::<AdminProfile>();
     let expected_size_after = base_size + (new_prices.len() * std::mem::size_of::<(u64, u64)>());
-
     assert_ne!(size_before, size_after, "Account size should have changed");
     assert_eq!(
         size_after, expected_size_after,
@@ -201,16 +224,32 @@ fn test_admin_update_prices_success() {
     );
 }
 
+/// Tests the successful dispatch of a command *from* an admin *to* a user.
+///
+/// ### Scenario
+/// An admin sends a notification or command to a user associated with their service.
+/// This is a non-financial transaction.
+///
+/// ### Arrange
+/// 1. An `AdminProfile` is created.
+/// 2. A `UserProfile` is created and linked to that admin.
+/// 3. The initial state of all accounts is recorded.
+///
+/// ### Act
+/// The `admin::dispatch_command` helper is called by the admin.
+///
+/// ### Assert
+/// 1. The internal balances (`balance`, `deposit_balance`) of both profiles are unchanged.
+/// 2. The on-chain lamport balances of both PDAs are also unchanged.
+/// 3. The admin's `authority` wallet balance decreases only by the transaction fee.
 #[test]
 fn test_admin_dispatch_command_success() {
     // === 1. Arrange ===
     let mut svm = setup_svm();
 
-    // -- Создаем Админа --
     let admin_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let admin_pda = admin::create_profile(&mut svm, &admin_authority, create_keypair().pubkey());
 
-    // -- Создаем Пользователя, которому админ отправит команду --
     let user_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let user_pda = user::create_profile(
         &mut svm,
@@ -219,7 +258,6 @@ fn test_admin_dispatch_command_success() {
         admin_pda,
     );
 
-    // -- Сохраняем состояние всех счетов *перед* вызовом команды --
     let admin_account_before = svm.get_account(&admin_pda).unwrap();
     let admin_profile_before =
         AdminProfile::try_deserialize(&mut admin_account_before.data.as_slice()).unwrap();
@@ -236,13 +274,12 @@ fn test_admin_dispatch_command_success() {
         &mut svm,
         &admin_authority,
         user_pda,
-        101, // ID команды-уведомления
+        101, // Notification command ID
         vec![4, 5, 6],
     );
     println!("Command dispatched successfully.");
 
     // === 3. Assert ===
-    // -- Получаем финальное состояние --
     let admin_account_after = svm.get_account(&admin_pda).unwrap();
     let admin_profile_after =
         AdminProfile::try_deserialize(&mut admin_account_after.data.as_slice()).unwrap();
@@ -253,19 +290,19 @@ fn test_admin_dispatch_command_success() {
 
     let admin_authority_lamports_after = svm.get_balance(&admin_authority.pubkey()).unwrap();
 
-    // Assertion 1: Внутренние балансы не изменились
+    // Assert that internal balances are unchanged
     assert_eq!(admin_profile_after.balance, admin_profile_before.balance);
     assert_eq!(
         user_profile_after.deposit_balance,
         user_profile_before.deposit_balance
     );
 
-    // Assertion 2: Балансы лампортов на PDA-аккаунтах не изменились
+    // Assert that PDA lamport balances are unchanged
     assert_eq!(admin_account_after.lamports, admin_account_before.lamports);
     assert_eq!(user_account_after.lamports, user_account_before.lamports);
 
-    // Assertion 3: Баланс админа-подписанта уменьшился только на комиссию за транзакцию
-    let expected_admin_authority_balance = admin_authority_lamports_before - 5000; // 5000 lamports for tx fee
+    // Assert admin's signer balance only changed by the transaction fee
+    let expected_admin_authority_balance = admin_authority_lamports_before - 5000;
     assert_eq!(
         admin_authority_lamports_after,
         expected_admin_authority_balance
@@ -278,18 +315,38 @@ fn test_admin_dispatch_command_success() {
     );
 }
 
+/// Tests the successful withdrawal of *earned* funds by an admin.
+///
+/// ### Scenario
+/// This is an integration test. A user pays an admin for a service via `user_dispatch_command`,
+/// and then the admin withdraws a portion of those earnings to an external wallet.
+///
+/// ### Arrange
+/// 1. An admin and a user are created.
+/// 2. The admin sets a price for a command.
+/// 3. The user deposits funds.
+/// 4. The user calls the paid command, transferring funds to the admin's balance.
+/// 5. The admin's state is recorded before the withdrawal.
+///
+/// ### Act
+/// The `admin::withdraw` helper is called.
+///
+/// ### Assert
+/// 1. The admin's internal `balance` decreases by the withdrawal amount.
+/// 2. The admin PDA's on-chain lamport balance also decreases by the same amount.
+/// 3. The destination wallet's balance increases by the withdrawal amount.
 #[test]
 fn test_admin_withdraw_success() {
     // === 1. Arrange ===
     let mut svm = setup_svm();
 
-    // -- Создаем Админа и устанавливаем цену на услугу --
+    // Create Admin and set a price for a service
     let admin_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let admin_pda = admin::create_profile(&mut svm, &admin_authority, create_keypair().pubkey());
     let command_price = 1 * LAMPORTS_PER_SOL;
     admin::update_prices(&mut svm, &admin_authority, vec![(1, command_price)]);
 
-    // -- Создаем Пользователя, который заплатит Админу --
+    // Create a User who will pay the Admin
     let user_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let _ = user::create_profile(
         &mut svm,
@@ -298,26 +355,25 @@ fn test_admin_withdraw_success() {
         admin_pda,
     );
 
-    // -- Пользователь вносит депозит на свой профиль --
+    // User deposits funds into their profile
     let deposit_amount = 2 * LAMPORTS_PER_SOL;
     user::deposit(&mut svm, &user_authority, admin_pda, deposit_amount);
 
-    // -- Пользователь "покупает" услугу, деньги переходят к Админу --
+    // User "buys" the service, transferring funds to the Admin
     println!("User pays admin {} lamports...", command_price);
     user::dispatch_command(&mut svm, &user_authority, admin_pda, 1, vec![1, 2, 3]);
 
-    // -- Готовимся к выводу средств --
+    // Prepare for the withdrawal
     let destination_wallet = create_keypair();
-    let withdraw_amount = command_price / 2; // Выводим половину заработанного
+    let withdraw_amount = command_price / 2; // Withdraw half of the earnings
 
-    // -- Сохраняем состояние *перед* выводом --
+    // Get state *before* the withdrawal
     let pda_account_before = svm.get_account(&admin_pda).unwrap();
     let pda_lamports_before = pda_account_before.lamports;
     let admin_profile_before =
         AdminProfile::try_deserialize(&mut pda_account_before.data.as_slice()).unwrap();
-    let destination_balance_before = 0; // Новый кошелек
+    let destination_balance_before = 0;
 
-    // Убедимся, что у админа действительно есть деньги на внутреннем балансе
     assert_eq!(admin_profile_before.balance, command_price);
 
     // === 2. Act ===
@@ -336,19 +392,14 @@ fn test_admin_withdraw_success() {
         AdminProfile::try_deserialize(&mut pda_account_after.data.as_slice()).unwrap();
     let destination_balance_after = svm.get_balance(&destination_wallet.pubkey()).unwrap();
 
-    // Assertion 1: Внутренний баланс админа в данных PDA уменьшился.
     assert_eq!(
         admin_profile_after.balance,
         admin_profile_before.balance - withdraw_amount
     );
-
-    // Assertion 2: Баланс лампортов самого PDA уменьшился.
     assert_eq!(
         pda_account_after.lamports,
         pda_lamports_before - withdraw_amount
     );
-
-    // Assertion 3: Баланс кошелька получателя увеличился.
     assert_eq!(
         destination_balance_after,
         destination_balance_before + withdraw_amount

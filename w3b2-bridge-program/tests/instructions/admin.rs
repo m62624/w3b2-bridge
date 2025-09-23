@@ -1,45 +1,79 @@
+use super::*;
 use w3b2_bridge_program::state::UpdatePricesArgs;
 
-use super::*;
+// --- High-Level Helper Functions ---
 
-/// A high-level function that handles the complete creation of an AdminProfile.
-/// It builds the instruction, sends the transaction, and returns the new PDA's address.
+/// A high-level test helper that orchestrates the creation of an `AdminProfile`.
+///
+/// This function builds the `admin_register_profile` instruction, sends it in a transaction
+/// signed by the `authority`, and returns the address of the newly created PDA.
+///
+/// # Arguments
+/// * `svm` - A mutable reference to the `LiteSVM` test environment.
+/// * `authority` - The `Keypair` of the admin's `ChainCard`, who will own the new profile.
+/// * `comm_key` - The `Pubkey` to be set as the initial off-chain communication key.
+///
+/// # Returns
+/// The `Pubkey` of the newly created `AdminProfile` PDA.
 pub fn create_profile(svm: &mut LiteSVM, authority: &Keypair, comm_key: Pubkey) -> Pubkey {
-    // Build the instruction required to register the admin profile.
     let (register_ix, admin_pda) = ix_create_profile(authority, comm_key);
-
-    // Send the instruction in a transaction, signed by the authority.
     build_and_send_tx(svm, vec![register_ix], authority, vec![]);
-
-    // Return the address of the newly created PDA for assertions in the test.
     admin_pda
 }
 
-/// Updates the communication key for an existing AdminProfile.
+/// A high-level test helper that updates the communication key for an existing `AdminProfile`.
+///
+/// # Arguments
+/// * `svm` - A mutable reference to the `LiteSVM` test environment.
+/// * `authority` - The admin's `ChainCard` `Keypair`, which must be the owner of the profile.
+/// * `new_comm_key` - The new `Pubkey` to set as the communication key.
 pub fn update_comm_key(svm: &mut LiteSVM, authority: &Keypair, new_comm_key: Pubkey) {
     let update_ix = ix_update_comm_key(authority, new_comm_key);
     build_and_send_tx(svm, vec![update_ix], authority, vec![]);
 }
 
-/// A high-level function that handles closing an AdminProfile.
+/// A high-level test helper that closes an `AdminProfile` account.
+///
+/// # Arguments
+/// * `svm` - A mutable reference to the `LiteSVM` test environment.
+/// * `authority` - The admin's `ChainCard` `Keypair`, who must own the profile.
+///   This keypair will also receive the rent refund from the closed account.
 pub fn close_profile(svm: &mut LiteSVM, authority: &Keypair) {
-    // Build the instruction required to close the admin profile.
     let close_ix = ix_close_profile(authority);
-
-    // Send the instruction in a transaction.
     build_and_send_tx(svm, vec![close_ix], authority, vec![]);
 }
 
+/// A high-level test helper that updates the price list for an `AdminProfile`.
+///
+/// # Arguments
+/// * `svm` - A mutable reference to the `LiteSVM` test environment.
+/// * `authority` - The admin's `ChainCard` `Keypair`.
+/// * `new_prices` - A vector of `(u64, u64)` tuples representing the new price list.
 pub fn update_prices(svm: &mut LiteSVM, authority: &Keypair, new_prices: Vec<(u64, u64)>) {
     let update_ix = ix_update_prices(authority, new_prices);
     build_and_send_tx(svm, vec![update_ix], authority, vec![]);
 }
 
+/// A high-level test helper that withdraws earned funds from an `AdminProfile`.
+///
+/// # Arguments
+/// * `svm` - A mutable reference to the `LiteSVM` test environment.
+/// * `authority` - The admin's `ChainCard` `Keypair`.
+/// * `destination` - The `Pubkey` of the wallet that will receive the withdrawn lamports.
+/// * `amount` - The amount of lamports to withdraw.
 pub fn withdraw(svm: &mut LiteSVM, authority: &Keypair, destination: Pubkey, amount: u64) {
     let withdraw_ix = ix_withdraw(authority, destination, amount);
     build_and_send_tx(svm, vec![withdraw_ix], authority, vec![]);
 }
 
+/// A high-level test helper that allows an admin to send a command to a user.
+///
+/// # Arguments
+/// * `svm` - A mutable reference to the `LiteSVM` test environment.
+/// * `authority` - The admin's `ChainCard` `Keypair`, who is initiating the command.
+/// * `user_profile_pda` - The `Pubkey` of the target `UserProfile` account.
+/// * `command_id` - The `u64` identifier for the command.
+/// * `payload` - A `Vec<u8>` containing arbitrary data for the command.
 pub fn dispatch_command(
     svm: &mut LiteSVM,
     authority: &Keypair,
@@ -51,23 +85,26 @@ pub fn dispatch_command(
     build_and_send_tx(svm, vec![dispatch_ix], authority, vec![]);
 }
 
-/// A low-level helper to build the `admin_register_profile` instruction.
+// --- Low-Level Instruction Builders ---
+
+/// A low-level builder for the `admin_register_profile` instruction.
+///
+/// It derives the `AdminProfile` PDA, then constructs the instruction `data` and
+/// `accounts` contexts before assembling the final `Instruction`.
+///
+/// # Returns
+/// A tuple containing the configured `Instruction` and the `Pubkey` of the `admin_pda`.
 fn ix_create_profile(authority: &Keypair, communication_pubkey: Pubkey) -> (Instruction, Pubkey) {
-    // Derive the Program-Derived Address (PDA) for the new admin profile.
-    // The seeds must exactly match the ones defined in the on-chain program.
     let (admin_pda, _) = Pubkey::find_program_address(
         &[b"admin", authority.pubkey().as_ref()],
         &w3b2_bridge_program::ID,
     );
 
-    // Construct the instruction data using the auto-generated struct from the `instruction` module.
     let data = w3b2_instruction::AdminRegisterProfile {
         communication_pubkey,
     }
     .data();
 
-    // Construct the list of accounts required by the `AdminRegisterProfile` context,
-    // using the auto-generated struct from the `accounts` module.
     let accounts = w3b2_accounts::AdminRegisterProfile {
         authority: authority.pubkey(),
         admin_profile: admin_pda,
@@ -75,7 +112,6 @@ fn ix_create_profile(authority: &Keypair, communication_pubkey: Pubkey) -> (Inst
     }
     .to_account_metas(None);
 
-    // Assemble the final instruction.
     let ix = Instruction {
         program_id: w3b2_bridge_program::ID,
         accounts,
@@ -85,6 +121,7 @@ fn ix_create_profile(authority: &Keypair, communication_pubkey: Pubkey) -> (Inst
     (ix, admin_pda)
 }
 
+/// A low-level builder for the `admin_update_comm_key` instruction.
 fn ix_update_comm_key(authority: &Keypair, new_key: Pubkey) -> Instruction {
     let (admin_pda, _) = Pubkey::find_program_address(
         &[b"admin", authority.pubkey().as_ref()],
@@ -106,18 +143,15 @@ fn ix_update_comm_key(authority: &Keypair, new_key: Pubkey) -> Instruction {
     }
 }
 
-/// A low-level helper to build the `admin_close_profile` instruction.
+/// A low-level builder for the `admin_close_profile` instruction.
 fn ix_close_profile(authority: &Keypair) -> Instruction {
-    // Find the PDA address for the profile to be closed.
     let (admin_pda, _) = Pubkey::find_program_address(
         &[b"admin", authority.pubkey().as_ref()],
         &w3b2_bridge_program::ID,
     );
 
-    // This instruction has no arguments, so its data is empty.
     let data = w3b2_instruction::AdminCloseProfile {}.data();
 
-    // The accounts context requires the authority and the profile to close.
     let accounts = w3b2_accounts::AdminCloseProfile {
         authority: authority.pubkey(),
         admin_profile: admin_pda,
@@ -131,20 +165,16 @@ fn ix_close_profile(authority: &Keypair) -> Instruction {
     }
 }
 
-/// A low-level helper to build the `admin_update_prices` instruction.
+/// A low-level builder for the `admin_update_prices` instruction.
 fn ix_update_prices(authority: &Keypair, new_prices: Vec<(u64, u64)>) -> Instruction {
     let (admin_pda, _) = Pubkey::find_program_address(
         &[b"admin", authority.pubkey().as_ref()],
         &w3b2_bridge_program::ID,
     );
 
-    // Create the argument container struct.
     let args = UpdatePricesArgs { new_prices };
-
-    // Build the instruction data.
     let data = w3b2_instruction::AdminUpdatePrices { args }.data();
 
-    // The accounts context requires authority, the profile, and system_program for realloc.
     let accounts = w3b2_accounts::AdminUpdatePrices {
         authority: authority.pubkey(),
         admin_profile: admin_pda,
@@ -159,7 +189,7 @@ fn ix_update_prices(authority: &Keypair, new_prices: Vec<(u64, u64)>) -> Instruc
     }
 }
 
-/// A low-level helper to build the `admin_withdraw` instruction.
+/// A low-level builder for the `admin_withdraw` instruction.
 fn ix_withdraw(authority: &Keypair, destination: Pubkey, amount: u64) -> Instruction {
     let (admin_pda, _) = Pubkey::find_program_address(
         &[b"admin", authority.pubkey().as_ref()],
@@ -183,6 +213,7 @@ fn ix_withdraw(authority: &Keypair, destination: Pubkey, amount: u64) -> Instruc
     }
 }
 
+/// A low-level builder for the `admin_dispatch_command` instruction.
 fn ix_dispatch_command(
     authority: &Keypair,
     user_profile_pda: Pubkey,
