@@ -1,5 +1,8 @@
 use super::*;
-use solana_program::{program::invoke, system_instruction};
+use crate::instructions::solana_program::program::invoke;
+use crate::instructions::solana_program::system_instruction;
+use anchor_lang::solana_program;
+// use solana_program::{program::invoke, system_instruction};
 
 /// The maximum size in bytes for the `payload` in dispatch instructions.
 const MAX_PAYLOAD_SIZE: usize = 1024;

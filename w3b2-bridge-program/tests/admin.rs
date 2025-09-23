@@ -343,7 +343,7 @@ fn test_admin_withdraw_success() {
     // Create Admin and set a price for a service
     let admin_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let admin_pda = admin::create_profile(&mut svm, &admin_authority, create_keypair().pubkey());
-    let command_price = 1 * LAMPORTS_PER_SOL;
+    let command_price = LAMPORTS_PER_SOL;
     admin::update_prices(&mut svm, &admin_authority, vec![(1, command_price)]);
 
     // Create a User who will pay the Admin

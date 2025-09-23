@@ -19,15 +19,14 @@ idl-build = ["anchor-lang/idl-build"]
 
 [dependencies]
 anchor-lang = { workspace = true, features = ["init-if-needed"] }
-solana-program.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
 solana-sdk = { workspace = true, features = ["full"] }
 solana-message.workspace = true
 borsh.workspace = true
-# наверно лучше это заюзаем, чтобы не поднимать каждый раз смарт контракт в local solana
-litesvm = "0.7.0"
+solana-program.workspace = true
 
+litesvm = "0.7.0"
 sha2 = "0.10.9"
 lazy_static = "1.5.0"

@@ -300,7 +300,7 @@ fn test_user_withdraw_success() {
 
     let pda_lamports_before = svm.get_balance(&user_pda).unwrap();
     let destination_balance_before = 0;
-    let withdraw_amount = 1 * LAMPORTS_PER_SOL;
+    let withdraw_amount = LAMPORTS_PER_SOL;
 
     // === 2. Act ===
     println!("User withdrawing {} lamports...", withdraw_amount);
@@ -370,7 +370,7 @@ fn test_user_dispatch_command_success() {
     let admin_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let admin_pda = admin::create_profile(&mut svm, &admin_authority, create_keypair().pubkey());
     let command_id_to_call = 1;
-    let command_price = 1 * LAMPORTS_PER_SOL;
+    let command_price = LAMPORTS_PER_SOL;
     admin::update_prices(
         &mut svm,
         &admin_authority,
