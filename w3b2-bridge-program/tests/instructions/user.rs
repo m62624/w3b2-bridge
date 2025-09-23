@@ -46,6 +46,17 @@ pub fn withdraw(
     build_and_send_tx(svm, vec![withdraw_ix], authority, vec![]);
 }
 
+pub fn dispatch_command(
+    svm: &mut LiteSVM,
+    authority: &Keypair,
+    admin_pda: Pubkey,
+    command_id: u64,
+    payload: Vec<u8>,
+) {
+    let dispatch_ix = ix_dispatch_command(authority, admin_pda, command_id, payload);
+    build_and_send_tx(svm, vec![dispatch_ix], authority, vec![]);
+}
+
 // --- Low-level Instruction Builders ---
 
 /// This function remains unchanged.
@@ -174,6 +185,38 @@ fn ix_withdraw(
         admin_profile: admin_pda,
         user_profile: user_pda,
         destination,
+        system_program: system_program::id(),
+    }
+    .to_account_metas(None);
+
+    Instruction {
+        program_id: w3b2_bridge_program::ID,
+        accounts,
+        data,
+    }
+}
+
+fn ix_dispatch_command(
+    authority: &Keypair,
+    admin_pda: Pubkey,
+    command_id: u64,
+    payload: Vec<u8>,
+) -> Instruction {
+    let (user_pda, _) = Pubkey::find_program_address(
+        &[b"user", authority.pubkey().as_ref(), admin_pda.as_ref()],
+        &w3b2_bridge_program::ID,
+    );
+
+    let data = w3b2_instruction::UserDispatchCommand {
+        command_id,
+        payload,
+    }
+    .data();
+
+    let accounts = w3b2_accounts::UserDispatchCommand {
+        authority: authority.pubkey(),
+        user_profile: user_pda,
+        admin_profile: admin_pda,
         system_program: system_program::id(),
     }
     .to_account_metas(None);

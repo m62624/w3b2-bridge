@@ -7,6 +7,7 @@ use instructions::*;
 use solana_program::native_token::LAMPORTS_PER_SOL;
 use solana_program::sysvar::rent::Rent;
 use solana_sdk::signature::Signer;
+use w3b2_bridge_program::state::AdminProfile;
 use w3b2_bridge_program::state::UserProfile;
 
 #[test]
@@ -308,5 +309,96 @@ fn test_user_withdraw_success() {
     println!(
         "   -> Destination wallet received: {} lamports",
         destination_balance_after
+    );
+}
+
+#[test]
+fn test_user_dispatch_command_success() {
+    // === 1. Arrange ===
+    let mut svm = setup_svm();
+
+    // -- Создаем Админа и устанавливаем цену за команду №1 --
+    let admin_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let admin_pda = admin::create_profile(&mut svm, &admin_authority, create_keypair().pubkey());
+    let command_id_to_call = 1;
+    let command_price = 1 * LAMPORTS_PER_SOL;
+    admin::update_prices(
+        &mut svm,
+        &admin_authority,
+        vec![(command_id_to_call, command_price)],
+    );
+
+    // -- Создаем Пользователя и пополняем его баланс --
+    let user_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let user_pda = user::create_profile(
+        &mut svm,
+        &user_authority,
+        create_keypair().pubkey(),
+        admin_pda,
+    );
+    let deposit_amount = 2 * LAMPORTS_PER_SOL;
+    user::deposit(&mut svm, &user_authority, admin_pda, deposit_amount);
+
+    // -- Сохраняем состояние всех счетов *перед* вызовом команды --
+    let user_pda_lamports_before = svm.get_balance(&user_pda).unwrap();
+    let admin_pda_lamports_before = svm.get_balance(&admin_pda).unwrap();
+
+    let admin_account_data_before = svm.get_account(&admin_pda).unwrap();
+    let admin_profile_before =
+        AdminProfile::try_deserialize(&mut admin_account_data_before.data.as_slice()).unwrap();
+
+    // === 2. Act ===
+    println!("User dispatching paid command...");
+    user::dispatch_command(
+        &mut svm,
+        &user_authority,
+        admin_pda,
+        command_id_to_call,
+        vec![1, 2, 3], // Произвольный payload
+    );
+    println!("Command dispatched successfully.");
+
+    // === 3. Assert ===
+    // -- Получаем финальное состояние всех счетов --
+    let user_account_after = svm.get_account(&user_pda).unwrap();
+    let user_profile_after =
+        UserProfile::try_deserialize(&mut user_account_after.data.as_slice()).unwrap();
+
+    let admin_account_after = svm.get_account(&admin_pda).unwrap();
+    let admin_profile_after =
+        AdminProfile::try_deserialize(&mut admin_account_after.data.as_slice()).unwrap();
+
+    // -- Проверяем балансы пользователя --
+    // Assertion 1: Внутренний баланс пользователя уменьшился на цену команды
+    assert_eq!(
+        user_profile_after.deposit_balance,
+        deposit_amount - command_price
+    );
+    // Assertion 2: Общий баланс лампортов PDA пользователя уменьшился
+    assert_eq!(
+        user_account_after.lamports,
+        user_pda_lamports_before - command_price
+    );
+
+    // -- Проверяем балансы админа --
+    // Assertion 3: Внутренний баланс админа увеличился на цену команды
+    assert_eq!(
+        admin_profile_after.balance,
+        admin_profile_before.balance + command_price
+    );
+    // Assertion 4: Общий баланс лампортов PDA админа увеличился
+    assert_eq!(
+        admin_account_after.lamports,
+        admin_pda_lamports_before + command_price
+    );
+
+    println!("✅ User Dispatch Command Test Passed!");
+    println!(
+        "   -> User balance changed: {} -> {}",
+        deposit_amount, user_profile_after.deposit_balance
+    );
+    println!(
+        "   -> Admin balance changed: {} -> {}",
+        admin_profile_before.balance, admin_profile_after.balance
     );
 }

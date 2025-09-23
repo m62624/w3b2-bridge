@@ -223,12 +223,10 @@ pub struct UserDispatchCommand<'info> {
         constraint = user_profile.authority == authority.key() @ BridgeError::Unauthorized
     )]
     pub user_profile: Account<'info, UserProfile>,
-     #[account(
+      #[account(
         mut,
         seeds = [b"admin", admin_profile.authority.as_ref()],
-        bump,
-        constraint = admin_profile.authority == user_profile.admin_authority_on_creation @ BridgeError::Unauthorized
-
+        bump
     )]
     pub admin_profile: Account<'info, AdminProfile>,
     pub system_program: Program<'info, System>,
