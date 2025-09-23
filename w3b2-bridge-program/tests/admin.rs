@@ -1,7 +1,7 @@
 mod instructions;
 
-use crate::instructions::{admin, common};
 use anchor_lang::AccountDeserialize;
+use instructions::*;
 use solana_program::native_token::LAMPORTS_PER_SOL;
 use solana_program::sysvar::rent::Rent;
 use solana_sdk::signature::Signer;
@@ -12,14 +12,14 @@ fn test_admin_create_profile_success() {
     // === 1. Arrange (Setup) ===
 
     // Initialize the Solana virtual machine and load our program.
-    let mut svm = common::setup_svm();
+    let mut svm = setup_svm();
 
     // Create a new keypair and fund it with 10 SOL. This keypair will act
     // as the `authority` for the new admin profile and pay for the transaction.
-    let authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
 
     // Create a separate keypair to simulate the off-chain communication key.
-    let comm_key = common::create_keypair();
+    let comm_key = create_keypair();
 
     // === 2. Act (Execution) ===
 
@@ -71,15 +71,15 @@ fn test_admin_create_profile_success() {
 #[test]
 fn test_admin_update_comm_key_success() {
     // === 1. Arrange ===
-    let mut svm = common::setup_svm();
-    let authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let mut svm = setup_svm();
+    let authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
 
     // Create the profile with an initial key.
-    let initial_comm_key = common::create_keypair();
+    let initial_comm_key = create_keypair();
     let admin_pda = admin::create_profile(&mut svm, &authority, initial_comm_key.pubkey());
 
     // Define the new key we want to update to.
-    let new_comm_key = common::create_keypair();
+    let new_comm_key = create_keypair();
 
     // === 2. Act ===
     println!("Updating communication key...");
@@ -114,9 +114,9 @@ fn test_admin_update_comm_key_success() {
 #[test]
 fn test_admin_close_profile_success() {
     // === 1. Arrange ===
-    let mut svm = common::setup_svm();
-    let authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
-    let comm_key = common::create_keypair();
+    let mut svm = setup_svm();
+    let authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let comm_key = create_keypair();
 
     // Create a profile that we can then close.
     let admin_pda = admin::create_profile(&mut svm, &authority, comm_key.pubkey());
@@ -154,9 +154,9 @@ fn test_admin_close_profile_success() {
 #[test]
 fn test_admin_update_prices_success() {
     // === 1. Arrange ===
-    let mut svm = common::setup_svm();
-    let authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
-    let comm_key = common::create_keypair();
+    let mut svm = setup_svm();
+    let authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let comm_key = create_keypair();
 
     // Create a profile. Initially, its `prices` vector is empty.
     let admin_pda = admin::create_profile(&mut svm, &authority, comm_key.pubkey());

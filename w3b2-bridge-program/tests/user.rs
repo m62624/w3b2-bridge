@@ -2,8 +2,8 @@
 
 mod instructions;
 
-use crate::instructions::{admin, common, user};
 use anchor_lang::AccountDeserialize;
+use instructions::*;
 use solana_program::native_token::LAMPORTS_PER_SOL;
 use solana_program::sysvar::rent::Rent;
 use solana_sdk::signature::Signer;
@@ -12,19 +12,15 @@ use w3b2_bridge_program::state::UserProfile;
 #[test]
 fn test_user_create_profile_success() {
     // === 1. Arrange ===
-    let mut svm = common::setup_svm();
+    let mut svm = setup_svm();
 
     // We need an admin to exist first, which our user profile will link to.
-    let admin_authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
-    let admin_pda = admin::create_profile(
-        &mut svm,
-        &admin_authority,
-        common::create_keypair().pubkey(),
-    );
+    let admin_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let admin_pda = admin::create_profile(&mut svm, &admin_authority, create_keypair().pubkey());
 
     // Now, create the user that will interact with this admin.
-    let user_authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
-    let user_comm_key = common::create_keypair();
+    let user_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let user_comm_key = create_keypair();
 
     // === 2. Act ===
     println!("Attempting to create user profile...");
@@ -74,19 +70,15 @@ fn test_user_create_profile_success() {
 #[test]
 fn test_user_update_comm_key_success() {
     // === 1. Arrange ===
-    let mut svm = common::setup_svm();
+    let mut svm = setup_svm();
 
     // Create an admin for the user to be linked to.
-    let admin_authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
-    let admin_pda = admin::create_profile(
-        &mut svm,
-        &admin_authority,
-        common::create_keypair().pubkey(),
-    );
+    let admin_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let admin_pda = admin::create_profile(&mut svm, &admin_authority, create_keypair().pubkey());
 
     // Create the user with an initial communication key.
-    let user_authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
-    let initial_comm_key = common::create_keypair();
+    let user_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let initial_comm_key = create_keypair();
     let user_pda = user::create_profile(
         &mut svm,
         &user_authority,
@@ -95,7 +87,7 @@ fn test_user_update_comm_key_success() {
     );
 
     // Define the new key we want to update to.
-    let new_comm_key = common::create_keypair();
+    let new_comm_key = create_keypair();
 
     // === 2. Act ===
     println!("Updating user communication key...");
@@ -128,22 +120,18 @@ fn test_user_update_comm_key_success() {
 #[test]
 fn test_user_close_profile_success() {
     // === 1. Arrange ===
-    let mut svm = common::setup_svm();
+    let mut svm = setup_svm();
 
     // Create an admin for the user to be linked to.
-    let admin_authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
-    let admin_pda = admin::create_profile(
-        &mut svm,
-        &admin_authority,
-        common::create_keypair().pubkey(),
-    );
+    let admin_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let admin_pda = admin::create_profile(&mut svm, &admin_authority, create_keypair().pubkey());
 
     // Create the user profile that we are going to close.
-    let user_authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let user_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let user_pda = user::create_profile(
         &mut svm,
         &user_authority,
-        common::create_keypair().pubkey(),
+        create_keypair().pubkey(),
         admin_pda,
     );
 
@@ -181,22 +169,18 @@ fn test_user_close_profile_success() {
 #[test]
 fn test_user_deposit_success() {
     // === 1. Arrange ===
-    let mut svm = common::setup_svm();
+    let mut svm = setup_svm();
 
     // Create an admin for the user to be linked to.
-    let admin_authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
-    let admin_pda = admin::create_profile(
-        &mut svm,
-        &admin_authority,
-        common::create_keypair().pubkey(),
-    );
+    let admin_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let admin_pda = admin::create_profile(&mut svm, &admin_authority, create_keypair().pubkey());
 
     // Create the user profile. Initially, its deposit_balance is 0.
-    let user_authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let user_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let user_pda = user::create_profile(
         &mut svm,
         &user_authority,
-        common::create_keypair().pubkey(),
+        create_keypair().pubkey(),
         admin_pda,
     );
 
@@ -249,22 +233,18 @@ fn test_user_deposit_success() {
 #[test]
 fn test_user_withdraw_success() {
     // === 1. Arrange ===
-    let mut svm = common::setup_svm();
+    let mut svm = setup_svm();
 
     // Create an admin for the user to be linked to.
-    let admin_authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
-    let admin_pda = admin::create_profile(
-        &mut svm,
-        &admin_authority,
-        common::create_keypair().pubkey(),
-    );
+    let admin_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let admin_pda = admin::create_profile(&mut svm, &admin_authority, create_keypair().pubkey());
 
     // Create the user profile.
-    let user_authority = common::create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
+    let user_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let user_pda = user::create_profile(
         &mut svm,
         &user_authority,
-        common::create_keypair().pubkey(),
+        create_keypair().pubkey(),
         admin_pda,
     );
 
@@ -273,7 +253,7 @@ fn test_user_withdraw_success() {
     user::deposit(&mut svm, &user_authority, admin_pda, deposit_amount);
 
     // Create a destination wallet to receive the withdrawn funds.
-    let destination_wallet = common::create_keypair();
+    let destination_wallet = create_keypair();
 
     // Get the state *before* the withdrawal.
     let pda_lamports_before = svm.get_balance(&user_pda).unwrap();
