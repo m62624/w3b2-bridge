@@ -155,7 +155,7 @@ pub struct UserCommandDispatched {
 /// A generic event for logging off-chain actions, such as HTTP requests.
 #[event]
 #[derive(Debug)]
-pub struct HttpActionLogged {
+pub struct OffChainActionLogged {
     /// The actor performing the action (User or Admin ChainCard).
     pub actor: Pubkey,
     /// A session identifier for correlating events.

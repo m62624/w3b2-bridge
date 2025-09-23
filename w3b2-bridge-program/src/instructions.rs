@@ -253,7 +253,7 @@ pub fn user_dispatch_command(
 }
 
 pub fn log_action(ctx: Context<LogAction>, session_id: u64, action_code: u16) -> Result<()> {
-    emit!(HttpActionLogged {
+    emit!(OffChainActionLogged {
         actor: ctx.accounts.authority.key(),
         session_id,
         action_code,
