@@ -86,6 +86,22 @@ pub fn admin_withdraw(ctx: Context<AdminWithdraw>, amount: u64) -> Result<()> {
     Ok(())
 }
 
+pub fn admin_dispatch_command(
+    ctx: Context<AdminDispatchCommand>,
+    command_id: u64,
+    payload: Vec<u8>,
+) -> Result<()> {
+    emit!(AdminCommandDispatched {
+        sender: ctx.accounts.admin_authority.key(),
+        target_user_authority: ctx.accounts.user_profile.authority,
+        command_id,
+        payload,
+        ts: Clock::get()?.unix_timestamp,
+    });
+
+    Ok(())
+}
+
 /// Creates a UserProfile PDA, linking a user's ChainCard to a specific admin service.
 pub fn user_create_profile(
     ctx: Context<UserCreateProfile>,
@@ -185,8 +201,8 @@ pub fn user_withdraw(ctx: Context<UserWithdraw>, amount: u64) -> Result<()> {
 
 // --- Operational Instructions ---
 
-pub fn dispatch_command(
-    ctx: Context<DispatchCommand>,
+pub fn user_dispatch_command(
+    ctx: Context<UserDispatchCommand>,
     command_id: u64,
     payload: Vec<u8>,
 ) -> Result<()> {
@@ -225,7 +241,7 @@ pub fn dispatch_command(
         admin_profile.balance += command_price;
     }
 
-    emit!(CommandDispatched {
+    emit!(UserCommandDispatched {
         sender: ctx.accounts.authority.key(),
         target_admin_authority: admin_profile.authority,
         command_id,

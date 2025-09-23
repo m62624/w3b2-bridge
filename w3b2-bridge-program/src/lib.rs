@@ -56,6 +56,14 @@ pub mod w3b2_bridge_program {
         instructions::admin_withdraw(ctx, amount)
     }
 
+    pub fn admin_dispatch_command(
+        ctx: Context<AdminDispatchCommand>,
+        command_id: u64,
+        payload: Vec<u8>,
+    ) -> Result<()> {
+        instructions::admin_dispatch_command(ctx, command_id, payload)
+    }
+
     // --- User Instructions ---
 
     /// Creates a UserProfile PDA, linking a user's ChainCard to a specific admin service.
@@ -90,12 +98,12 @@ pub mod w3b2_bridge_program {
 
     /// The main instruction for a user to call a service's API.
     /// Handles payment by debiting the user's deposit and crediting the admin's balance.
-    pub fn dispatch_command(
-        ctx: Context<DispatchCommand>,
+    pub fn user_dispatch_command(
+        ctx: Context<UserDispatchCommand>,
         command_id: u64,
         payload: Vec<u8>,
     ) -> Result<()> {
-        instructions::dispatch_command(ctx, command_id, payload)
+        instructions::user_dispatch_command(ctx, command_id, payload)
     }
 
     /// Logs a significant off-chain action to the blockchain for auditing purposes.

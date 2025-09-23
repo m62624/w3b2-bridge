@@ -103,6 +103,23 @@ pub struct AdminCloseProfile<'info> {
     pub admin_profile: Account<'info, AdminProfile>,
 }
 
+#[derive(Accounts)]
+pub struct AdminDispatchCommand<'info> {
+    pub admin_authority: Signer<'info>,
+
+    #[account(
+        seeds = [b"admin", admin_authority.key().as_ref()],
+        bump,
+        constraint = admin_profile.authority == admin_authority.key() @ BridgeError::Unauthorized
+    )]
+    pub admin_profile: Account<'info, AdminProfile>,
+
+    #[account(
+        constraint = user_profile.admin_authority_on_creation == admin_profile.key() @ BridgeError::Unauthorized
+    )]
+    pub user_profile: Account<'info, UserProfile>,
+}
+
 /// Represents the on-chain profile for a User, linking them to a specific Admin.
 /// This PDA holds the user's authorization key and their deposit balance for the service.
 #[account]
@@ -197,7 +214,7 @@ pub struct UserCloseProfile<'info> {
 }
 
 #[derive(Accounts)]
-pub struct DispatchCommand<'info> {
+pub struct UserDispatchCommand<'info> {
     pub authority: Signer<'info>, // User's ChainCard
     #[account(
         mut,

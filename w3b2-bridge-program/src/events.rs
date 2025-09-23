@@ -12,6 +12,13 @@ pub struct AdminProfileRegistered {
     pub ts: i64,
 }
 
+#[event]
+pub struct AdminCommKeyUpdated {
+    pub authority: Pubkey,
+    pub new_comm_pubkey: Pubkey,
+    pub ts: i64,
+}
+
 /// Emitted when an admin updates their service prices.
 #[event]
 #[derive(Debug)]
@@ -48,6 +55,21 @@ pub struct AdminProfileClosed {
     pub ts: i64,
 }
 
+#[event]
+#[derive(Debug)]
+pub struct AdminCommandDispatched {
+    /// The sender of the command (Admin's ChainCard).
+    pub sender: Pubkey,
+    /// The target of the command (User's authority Pubkey).
+    pub target_user_authority: Pubkey,
+    /// The ID of the command being executed.
+    pub command_id: u64,
+    /// Optional payload associated with the command.
+    pub payload: Vec<u8>,
+    /// The timestamp of the dispatch.
+    pub ts: i64,
+}
+
 // --- User Lifecycle & Financial Events ---
 
 /// Emitted when a new UserProfile PDA is created for a specific admin.
@@ -60,6 +82,13 @@ pub struct UserProfileCreated {
     pub target_admin: Pubkey,
     pub communication_pubkey: Pubkey,
     /// The timestamp of the creation.
+    pub ts: i64,
+}
+
+#[event]
+pub struct UserCommKeyUpdated {
+    pub authority: Pubkey,
+    pub new_comm_pubkey: Pubkey,
     pub ts: i64,
 }
 
@@ -108,7 +137,7 @@ pub struct UserProfileClosed {
 /// Emitted when a user calls a command, potentially a paid one.
 #[event]
 #[derive(Debug)]
-pub struct CommandDispatched {
+pub struct UserCommandDispatched {
     /// The sender of the command (User's ChainCard).
     pub sender: Pubkey,
     /// The target of the command (Admin's authority Pubkey).
@@ -134,19 +163,5 @@ pub struct HttpActionLogged {
     /// A code representing the specific action taken.
     pub action_code: u16,
     /// The timestamp of the action.
-    pub ts: i64,
-}
-
-#[event]
-pub struct AdminCommKeyUpdated {
-    pub authority: Pubkey,
-    pub new_comm_pubkey: Pubkey,
-    pub ts: i64,
-}
-
-#[event]
-pub struct UserCommKeyUpdated {
-    pub authority: Pubkey,
-    pub new_comm_pubkey: Pubkey,
     pub ts: i64,
 }
