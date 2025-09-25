@@ -56,8 +56,10 @@ pub fn admin_close_profile(ctx: Context<AdminCloseProfile>) -> Result<()> {
 /// to accommodate the new list size.
 pub fn admin_update_prices(
     ctx: Context<AdminUpdatePrices>,
-    new_prices: Vec<(u64, u64)>,
+    mut new_prices: Vec<(u16, u64)>,
 ) -> Result<()> {
+    new_prices.sort_unstable_by_key(|k| k.0);
+    new_prices.dedup_by_key(|k| k.0);
     ctx.accounts.admin_profile.prices = new_prices.clone();
     emit!(AdminPricesUpdated {
         authority: ctx.accounts.authority.key(),
@@ -249,7 +251,7 @@ pub fn user_withdraw(ctx: Context<UserWithdraw>, amount: u64) -> Result<()> {
 /// transferring lamports from the `UserProfile` PDA to the `AdminProfile` PDA.
 pub fn user_dispatch_command(
     ctx: Context<UserDispatchCommand>,
-    command_id: u64,
+    command_id: u16,
     payload: Vec<u8>,
 ) -> Result<()> {
     require!(
@@ -260,13 +262,13 @@ pub fn user_dispatch_command(
     let user_profile = &mut ctx.accounts.user_profile;
     let admin_profile = &mut ctx.accounts.admin_profile;
 
-    // Find the price for the requested command_id from the admin's price list.
-    let command_price = admin_profile
+    let command_price = match admin_profile
         .prices
-        .iter()
-        .find(|&&(id, _)| id == command_id)
-        .map(|&(_, price)| price)
-        .unwrap_or(0);
+        .binary_search_by_key(&command_id, |&(id, _)| id)
+    {
+        Ok(index) => admin_profile.prices[index].1,
+        Err(_) => 0,
+    };
 
     // If the command is not free, process the payment.
     if command_price > 0 {

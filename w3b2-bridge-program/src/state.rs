@@ -19,7 +19,7 @@ pub struct AdminProfile {
     pub communication_pubkey: Pubkey,
     /// A dynamic list of `(command_id, price)` tuples that defines the cost
     /// in lamports for various off-chain services.
-    pub prices: Vec<(u64, u64)>,
+    pub prices: Vec<(u16, u64)>,
     /// The internal balance in lamports where fees from paid user commands are collected.
     /// This balance can be withdrawn by the admin.
     pub balance: u64,
@@ -95,7 +95,7 @@ pub struct AdminUpdatePrices<'info> {
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct UpdatePricesArgs {
     /// The new price list to set for the admin's services.
-    pub new_prices: Vec<(u64, u64)>,
+    pub new_prices: Vec<(u16, u64)>,
 }
 
 /// Defines the accounts for the `admin_withdraw` instruction.

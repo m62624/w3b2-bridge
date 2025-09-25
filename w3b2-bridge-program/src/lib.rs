@@ -165,7 +165,7 @@ pub mod w3b2_bridge_program {
     /// * `payload` - An opaque `Vec<u8>` containing serialized, application-specific data for the off-chain service.
     pub fn user_dispatch_command(
         ctx: Context<UserDispatchCommand>,
-        command_id: u64,
+        command_id: u16,
         payload: Vec<u8>,
     ) -> Result<()> {
         instructions::user_dispatch_command(ctx, command_id, payload)

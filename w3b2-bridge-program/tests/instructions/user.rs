@@ -102,7 +102,7 @@ pub fn dispatch_command(
     svm: &mut LiteSVM,
     authority: &Keypair,
     admin_pda: Pubkey,
-    command_id: u64,
+    command_id: u16,
     payload: Vec<u8>,
 ) {
     let dispatch_ix = ix_dispatch_command(authority, admin_pda, command_id, payload);
@@ -254,7 +254,7 @@ fn ix_withdraw(
 fn ix_dispatch_command(
     authority: &Keypair,
     admin_pda: Pubkey,
-    command_id: u64,
+    command_id: u16,
     payload: Vec<u8>,
 ) -> Instruction {
     let (user_pda, _) = Pubkey::find_program_address(

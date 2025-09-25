@@ -36,7 +36,7 @@ pub struct AdminPricesUpdated {
     /// The public key of the `AdminProfile`'s owner (`ChainCard`).
     pub authority: Pubkey,
     /// A vector of tuples `(command_id, price)` representing the new price list for the service.
-    pub new_prices: Vec<(u64, u64)>,
+    pub new_prices: Vec<(u16, u64)>,
     /// The Unix timestamp of the price update.
     pub ts: i64,
 }
@@ -160,7 +160,7 @@ pub struct UserCommandDispatched {
     /// The public key of the admin's `ChainCard` that owns the target service.
     pub target_admin_authority: Pubkey,
     /// A `u64` identifier for the specific command being executed.
-    pub command_id: u64,
+    pub command_id: u16,
     /// The amount in lamports deducted from the user's deposit balance for this command (0 if free).
     pub price_paid: u64,
     /// An opaque byte array containing application-specific data for the command.

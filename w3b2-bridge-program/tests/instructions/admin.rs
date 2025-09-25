@@ -49,7 +49,7 @@ pub fn close_profile(svm: &mut LiteSVM, authority: &Keypair) {
 /// * `svm` - A mutable reference to the `LiteSVM` test environment.
 /// * `authority` - The admin's `ChainCard` `Keypair`.
 /// * `new_prices` - A vector of `(u64, u64)` tuples representing the new price list.
-pub fn update_prices(svm: &mut LiteSVM, authority: &Keypair, new_prices: Vec<(u64, u64)>) {
+pub fn update_prices(svm: &mut LiteSVM, authority: &Keypair, new_prices: Vec<(u16, u64)>) {
     let update_ix = ix_update_prices(authority, new_prices);
     build_and_send_tx(svm, vec![update_ix], authority, vec![]);
 }
@@ -166,7 +166,7 @@ fn ix_close_profile(authority: &Keypair) -> Instruction {
 }
 
 /// A low-level builder for the `admin_update_prices` instruction.
-fn ix_update_prices(authority: &Keypair, new_prices: Vec<(u64, u64)>) -> Instruction {
+fn ix_update_prices(authority: &Keypair, new_prices: Vec<(u16, u64)>) -> Instruction {
     let (admin_pda, _) = Pubkey::find_program_address(
         &[b"admin", authority.pubkey().as_ref()],
         &w3b2_bridge_program::ID,
