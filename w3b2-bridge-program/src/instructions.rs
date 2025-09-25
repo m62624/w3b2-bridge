@@ -5,7 +5,7 @@ use anchor_lang::solana_program;
 // use solana_program::{program::invoke, system_instruction};
 
 /// The maximum size in bytes for the `payload` in dispatch instructions.
-const MAX_PAYLOAD_SIZE: usize = 1024;
+pub const MAX_PAYLOAD_SIZE: usize = 1000;
 
 // --- Admin Instructions ---
 
@@ -111,6 +111,11 @@ pub fn admin_dispatch_command(
     command_id: u64,
     payload: Vec<u8>,
 ) -> Result<()> {
+    require!(
+        payload.len() <= MAX_PAYLOAD_SIZE,
+        BridgeError::PayloadTooLarge
+    );
+
     emit!(AdminCommandDispatched {
         sender: ctx.accounts.admin_authority.key(),
         target_user_authority: ctx.accounts.user_profile.authority,

@@ -1,4 +1,8 @@
+// w3b2-bridge-program/src/protocol.rs
+
 use anchor_lang::prelude::*;
+
+use crate::instructions::MAX_PAYLOAD_SIZE;
 
 /*
     This file defines serializable data structures intended for off-chain communication.
@@ -39,34 +43,79 @@ pub enum Destination {
     Url(String),
 }
 
+impl Destination {
+    /// Calculates the serialized size of the enum variant.
+    pub fn size(&self) -> usize {
+        1 + match self {
+            // 1 byte for the enum variant tag
+            Destination::IpV4(_, _) => 4 + 2, // 4 bytes for IP, 2 bytes for port
+            Destination::IpV6(_, _) => 16 + 2, // 16 bytes for IP, 2 bytes for port
+            Destination::Url(s) => 4 + s.len(), // 4 bytes for string length prefix + string bytes
+        }
+    }
+}
+
 /// A structured message for initiating a secure, stateful off-chain communication session.
-///
-/// It is typically serialized and passed in the `payload` of a `dispatch_command`.
-/// It serves as the "handshake" to establish a direct, encrypted channel.
 #[derive(AnchorSerialize, AnchorDeserialize, Debug, Clone, PartialEq, Eq)]
 pub struct CommandConfig {
-    /// A unique identifier for the off-chain session. All subsequent on-chain
-    /// (`log_action`) and off-chain activities related to this interaction should be
-    /// tagged with this ID for correlation and auditing.
+    /// A unique identifier for the off-chain session.
     pub session_id: u64,
-
     /// A variable-length byte array containing the encrypted session key.
-    /// The method of encryption and the format of this field are NOT defined by the
-    /// on-chain protocol; they should be agreed upon by the off-chain participants.
-    ///
-    /// It is EXPECTED that this payload is asymmetrically encrypted using a key
-    /// agreement scheme (like X25519 or ECDH) with the recipient's on-chain
-    /// `communication_pubkey`. This enables a secure key exchange, establishing
-    /// an encrypted channel for direct off-chain communication.
-    // CHANGED: from `[u8; 80]` to `Vec<u8>` for flexibility.
     pub encrypted_session_key: Vec<u8>,
-
-    /// The network endpoint where the initiator of the command expects the
-    /// recipient to connect for the off-chain part of the session.
+    /// The network endpoint where the initiator expects the recipient to connect.
     pub destination: Destination,
-
-    /// A flexible, general-purpose byte array for any additional metadata
-    /// required by the specific off-chain protocol. This could include protocol
-    /// versioning, initial commands, or other setup data.
+    /// A flexible, general-purpose byte array for any additional metadata.
     pub meta: Vec<u8>,
+}
+
+/// An error type for the CommandConfig constructor, used for client-side validation.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ConfigError {
+    /// Returned when the total serialized size of the config exceeds `MAX_PAYLOAD_SIZE`.
+    PayloadTooLarge {
+        calculated_size: usize,
+        max_size: usize,
+    },
+}
+
+impl CommandConfig {
+    /// Calculates the total size of the struct when serialized with Borsh.
+    fn calculate_size(&self) -> usize {
+        // Size of session_id (u64)
+        8 +
+        // Size of encrypted_session_key (4 bytes for length + content)
+        (4 + self.encrypted_session_key.len()) +
+        // Size of destination enum (1 byte for tag + content)
+        self.destination.size() +
+        // Size of meta (4 bytes for length + content)
+        (4 + self.meta.len())
+    }
+
+    /// Constructs a new `CommandConfig`, validating the total serialized payload size.
+    /// This provides a crucial client-side check to prevent sending transactions
+    /// that are guaranteed to fail on-chain due to size limits.
+    pub fn new(
+        session_id: u64,
+        encrypted_session_key: Vec<u8>,
+        destination: Destination,
+        meta: Vec<u8>,
+    ) -> std::result::Result<Self, ConfigError> {
+        let config = Self {
+            session_id,
+            encrypted_session_key,
+            destination,
+            meta,
+        };
+
+        let calculated_size = config.calculate_size();
+
+        if calculated_size > MAX_PAYLOAD_SIZE {
+            return Err(ConfigError::PayloadTooLarge {
+                calculated_size,
+                max_size: MAX_PAYLOAD_SIZE,
+            });
+        }
+
+        Ok(config)
+    }
 }
