@@ -11,7 +11,7 @@ message Empty {}
 message PriceEntry {
   // The command identifier. Corresponds to `u16` in Rust.
   uint32 command_id = 1;
-  // The price in lamports. Corresponds to `u64` in Rust.
+  // The price in lamports. Corresponds to `u64` in Rust.f
   uint64 price = 2;
 }
 

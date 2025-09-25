@@ -1,64 +1,64 @@
-use crate::config::SyncConfig;
-use crate::events::{try_parse_log, BridgeEvent};
-use crate::storage::Storage;
+// w3b2-connector/src/live.rs
+
+use crate::worker::WorkerContext;
 use anyhow::Result;
-use solana_client::nonblocking::pubsub_client::PubsubClient;
-use solana_client::rpc_config::{RpcTransactionLogsConfig, RpcTransactionLogsFilter};
-use solana_client::rpc_response::Response;
+use solana_client::{
+    nonblocking::pubsub_client::PubsubClient,
+    rpc_config::{RpcTransactionLogsConfig, RpcTransactionLogsFilter},
+    rpc_response::Response,
+};
 use solana_sdk::commitment_config::CommitmentConfig;
-use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
-/// live-sync worker: слушает новые блоки через WS и отправляет события в канал
-pub async fn run_live(
-    cfg: SyncConfig,
-    storage: Storage,
-    sender: mpsc::Sender<BridgeEvent>,
-) -> Result<()> {
-    let client = PubsubClient::new(&cfg.ws_url).await?;
+pub struct LiveWorker {
+    ctx: WorkerContext,
+}
 
-    let (mut stream, _) = client
-        .logs_subscribe(
-            RpcTransactionLogsFilter::Mentions(vec![w3b2_bridge_program::ID.to_string()]),
-            RpcTransactionLogsConfig {
-                commitment: Some(CommitmentConfig::confirmed()),
-            },
-        )
-        .await?;
+impl LiveWorker {
+    pub fn new(ctx: WorkerContext) -> Self {
+        Self { ctx }
+    }
 
-    tracing::info!("Live worker connected to WebSocket and listening for logs.");
+    /// Subscribes to new logs via WebSocket and processes them in real-time.
+    pub async fn run(&self) -> Result<()> {
+        let client = PubsubClient::new(&self.ctx.config.solana.ws_url).await?;
 
-    while let Some(msg) = stream.next().await {
-        let Response { context, value } = msg;
-        let slot = context.slot;
+        let (mut stream, _) = client
+            .logs_subscribe(
+                RpcTransactionLogsFilter::Mentions(vec![w3b2_bridge_program::ID.to_string()]),
+                RpcTransactionLogsConfig {
+                    commitment: Some(CommitmentConfig {
+                        commitment: self.ctx.config.solana.commitment,
+                    }),
+                },
+            )
+            .await?;
 
-        // Предотвращаем двойную обработку, если catch-up воркер еще не закончил
-        if slot <= storage.get_last_slot() {
-            tracing::trace!(
-                "Live worker skipping slot {} as it is less than or equal to last processed slot {}.",
-                slot,
-                storage.get_last_slot()
-            );
-            continue;
-        }
+        tracing::info!("Live worker connected to WebSocket and listening for logs.");
 
-        for log in value.logs {
-            if let Ok(ev) = try_parse_log(&log) {
-                if !matches!(ev, BridgeEvent::Unknown) {
-                    tracing::info!("[LIVE] slot={} event={:?}", slot, ev);
-                    if sender.send(ev).await.is_err() {
-                        return Err(anyhow::anyhow!(
-                            "MPSC channel closed. Shutting down live worker."
-                        ));
+        while let Some(msg) = stream.next().await {
+            let Response { context, value } = msg;
+            let slot = context.slot;
+
+            if slot <= self.ctx.storage.get_last_slot().await? {
+                continue;
+            }
+
+            for log in value.logs {
+                if let Ok(event) = crate::events::try_parse_log(&log) {
+                    if !matches!(event, crate::events::BridgeEvent::Unknown) {
+                        tracing::info!("[LIVE] slot={} event={:?}", slot, event);
+                        if self.ctx.event_sender.send(event).is_err() {
+                            tracing::warn!("No active receivers for broadcast channel.");
+                        }
                     }
                 }
             }
+            self.ctx
+                .storage
+                .set_sync_state(slot, &value.signature)
+                .await?;
         }
-
-        // Обновляем состояние
-        storage.set_last_slot(slot);
-        storage.set_last_sig(&value.signature);
+        Ok(())
     }
-
-    Ok(())
 }

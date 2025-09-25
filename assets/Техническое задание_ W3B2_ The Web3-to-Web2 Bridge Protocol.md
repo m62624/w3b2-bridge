@@ -90,3 +90,116 @@
             * `admin_profile.balance += 1000` (зачисляет на внутренний баланс админа).
         4.  Эмитит событие `CommandEvent`.
 
+
+
+
+
+Отлично\! Финальный `README` готов, on-chain программа полностью задокументирована и протестирована. Настал тот самый день — мы переходим к `w3b2-connector`.
+
+Это отличный, продуманный план. Ты правильно смотришь наперед: `ChainCard` как основная сущность, `sled` как хранилище по умолчанию, шифрование через `bip39` и `tokio` для асинхронной обработки.
+
+И твоя последняя мысль — **ключевая**.
+
+> "Кстати мне кажется лучше, эти два потока [catchup и live] сделать основными, и перекидывать через channels уже спарсенные данные в нужные потоки tokio для каждого ChainCard"
+
+Это абсолютно правильный, профессиональный подход. Создавать по два потока на каждый `ChainCard` было бы очень неэффективно. Вместо этого мы построим архитектуру **"Центральный Диспетчер Событий"**.
+
+-----
+
+### \#\# Архитектура: Центральный Диспетчер Событий
+
+Вот как будет выглядеть наша глобальная архитектура:
+
+1.  **`Synchronizer` (2 потока):** У нас по-прежнему будут два "глобальных" потока (`catchup` и `live`), как в твоем старом коде. Их **единственная** задача — слушать блокчейн и получать **все** события подряд.
+
+2.  **`Dispatcher` (1 поток):** `Synchronizer` будет отправлять все события в один главный канал. На другом конце этого канала будет сидеть `Dispatcher`. Его задача — посмотреть на событие, определить, какому `Pubkey` оно адресовано (`authority`, `sender`, `target`, и т.д.), и **перенаправить (dispatch)** это событие в персональный канал нужного `ChainCard`'а.
+
+3.  **`ChainCard Workers` (по 1 потоку на карту):** Каждый активный `ChainCard` будет иметь свой собственный `tokio` поток (`worker`). Этот воркер будет слушать свой **персональный канал** и обрабатывать только те события, которые `Dispatcher` прислал специально для него.
+
+**Визуально это выглядит так:**
+`[ Solana RPC/WS ]` -\> `[ Synchronizer ]` -\> `[ Главный канал ]` -\> `[ Dispatcher ]` -\> `[ Персональные каналы для ChainCard A, B, C... ]`
+
+-----
+
+### \#\#\# План глобальных изменений
+
+Разделим работу на логические этапы. `gRPC`, как ты и сказал, оставим на самый конец.
+
+#### **Этап 1: Фундамент — `ChainCard` и безопасное хранилище (`keystore`)**
+
+Это наша первая и главная задача. Нам нужно определить сущность `ChainCard` и научиться безопасно её создавать, хранить и загружать.
+
+  * **Структура `ChainCard`:** Определим `struct ChainCard`, которая будет хранить `Keypair` (в защищенном виде) и метаданные (`HashMap<String, String>`).
+  * **Модуль `keystore`:** Создадим модуль для управления хранилищем. В нем будет трейт `Keystore`, что позволит в будущем легко заменять `sled` на другое хранилище (например, in-memory для тестов или PostgreSQL).
+  * **Шифрование и мнемоники:** Реализуем генерацию `Keypair` из `bip39` мнемонической фразы и пароля. Для безопасного хранения фразы в памяти будем использовать крейт `secrecy`.
+  * **Импорт/Экспорт:** `Keystore` будет отвечать за шифрование и сохранение `ChainCard` в базу `sled`, а также за экспорт в защищенный файл или строку.
+
+#### **Этап 2: Обновление "Слушателя" — `Synchronizer` и `Dispatcher`**
+
+Код твоего "слушателя" устарел, так как on-chain события полностью изменились.
+
+  * **Рефакторинг `events.rs` (в коннекторе):** Твой текущий файл `events.rs` в коннекторе нужно **полностью переписать**, чтобы он соответствовал новому `bridge.proto` и новым `#[event]` структурам из смарт-контракта. Это критически важный шаг.
+  * **Создание `Dispatcher`:** Напишем логику диспетчера, который будет принимать события из `Synchronizer` и раскладывать их по каналам для каждого `ChainCard`.
+  * **Адаптация `Synchronizer`:** Твой существующий код для `catchup` и `live` очень хорош. Мы его немного адаптируем, чтобы он отправлял события в наш новый `Dispatcher`.
+
+#### **Этап 3: Логика `ChainCard` воркера**
+
+Когда фундамент будет готов, мы напишем саму бизнес-логику для `ChainCard`'а.
+
+  * Каждый `ChainCard` будет запускать `tokio::spawn`, который в цикле слушает свой персональный канал.
+  * Получив событие (например, `UserFundsDeposited`), воркер будет выполнять нужные действия (например, обновить локальный стейт, отправить уведомление и т.д.).
+
+-----
+
+### \#\#\# С чего начнем?
+
+Как ты и предложил: **с `ChainCard` и безопасного хранилища**. Это основа всего.
+
+Давай начнем с определения `ChainCard` и трейта для `Keystore`. Это задаст структуру для всего первого этапа.
+
+**Вот как может выглядеть начало в `w3b2-connector/src/keystore.rs`:**
+
+```rust
+// w3b2-connector/src/keystore.rs
+
+use anyhow::Result;
+use secrecy::{Secret, ExposeSecret}; // Для безопасной работы с мнемоникой
+use solana_sdk::pubkey::Pubkey;
+use solana_sdk::signature::{Keypair, Signer};
+use std::collections::HashMap;
+
+/// Represents an isolated service wallet.
+pub struct ChainCard {
+    /// The public key of this ChainCard.
+    pubkey: Pubkey,
+    /// The underlying keypair. Should be handled with care.
+    keypair: Keypair, // В реальной реализации это может быть более сложный тип
+    /// Arbitrary metadata associated with this card (e.g., "name", "service_url").
+    pub metadata: HashMap<String, String>,
+}
+
+/// A trait defining the required functionality for a secure keystore.
+/// This allows for different backend implementations (e.g., Sled, in-memory).
+#[async_trait::async_trait]
+pub trait Keystore {
+    /// Creates a new ChainCard from a BIP39 mnemonic and password, and saves it.
+    async fn create_card_from_mnemonic(
+        &self,
+        id: &str,
+        mnemonic: Secret<String>,
+        password: Secret<String>,
+        metadata: HashMap<String, String>,
+    ) -> Result<ChainCard>;
+    
+    /// Loads a ChainCard from the store using its ID and password.
+    async fn load_card(&self, id: &str, password: Secret<String>) -> Result<ChainCard>;
+    
+    /// Deletes a card from the store.
+    async fn delete_card(&self, id: &str) -> Result<()>;
+    
+    /// Lists all available card IDs and their metadata.
+    async fn list_cards(&self) -> Result<HashMap<String, HashMap<String, String>>>;
+}
+```
+
+Это наша отправная точка. Дальше мы реализуем этот трейт для `sled` и добавим логику генерации ключей.

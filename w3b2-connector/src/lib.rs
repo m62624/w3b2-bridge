@@ -1,10 +1,9 @@
 mod catchup;
-mod config;
-pub mod events;
 mod live;
-mod storage;
-mod synchronizer;
 
-pub use config::SyncConfig;
-pub use storage::Storage;
-pub use synchronizer::Synchronizer;
+pub mod config;
+pub mod events;
+pub mod grpc_server;
+pub mod storage;
+pub mod synchronizer;
+pub mod worker;

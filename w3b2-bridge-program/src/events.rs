@@ -5,7 +5,7 @@ use anchor_lang::prelude::*;
 /// Emitted when a new AdminProfile PDA is created.
 /// This signifies that a new service has been registered on the protocol.
 #[event]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AdminProfileRegistered {
     /// The public key of the admin's `ChainCard`, which serves as the unique owner
     /// and signer for the `AdminProfile`.
@@ -19,7 +19,7 @@ pub struct AdminProfileRegistered {
 
 /// Emitted when an admin updates their off-chain communication public key.
 #[event]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AdminCommKeyUpdated {
     /// The public key of the admin's `ChainCard` that authorized this update.
     pub authority: Pubkey,
@@ -31,7 +31,7 @@ pub struct AdminCommKeyUpdated {
 
 /// Emitted when an admin updates their service prices.
 #[event]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AdminPricesUpdated {
     /// The public key of the `AdminProfile`'s owner (`ChainCard`).
     pub authority: Pubkey,
@@ -43,7 +43,7 @@ pub struct AdminPricesUpdated {
 
 /// Emitted when an admin withdraws earned funds from their profile's internal balance.
 #[event]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AdminFundsWithdrawn {
     /// The `ChainCard` public key of the admin who initiated the withdrawal.
     pub authority: Pubkey,
@@ -57,7 +57,7 @@ pub struct AdminFundsWithdrawn {
 
 /// Emitted when an `AdminProfile` PDA is closed, effectively unregistering the service.
 #[event]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AdminProfileClosed {
     /// The `ChainCard` public key of the admin whose profile was closed.
     pub authority: Pubkey,
@@ -67,7 +67,7 @@ pub struct AdminProfileClosed {
 
 /// Emitted when an admin sends a command (notification) to a user.
 #[event]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AdminCommandDispatched {
     /// The public key of the admin's `ChainCard`, who is the initiator of this command.
     pub sender: Pubkey,
@@ -85,7 +85,7 @@ pub struct AdminCommandDispatched {
 
 /// Emitted when a new `UserProfile` PDA is created, linking a user to a specific admin.
 #[event]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UserProfileCreated {
     /// The public key of the user's `ChainCard`, which is the sole owner of this `UserProfile`.
     pub authority: Pubkey,
@@ -99,7 +99,7 @@ pub struct UserProfileCreated {
 
 /// Emitted when a user updates their off-chain communication public key.
 #[event]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UserCommKeyUpdated {
     /// The `ChainCard` public key of the user who authorized this update.
     pub authority: Pubkey,
@@ -111,7 +111,7 @@ pub struct UserCommKeyUpdated {
 
 /// Emitted when a user deposits funds into their `UserProfile` to pay for services.
 #[event]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UserFundsDeposited {
     /// The public key of the user (`ChainCard`) who made the deposit.
     pub authority: Pubkey,
@@ -125,7 +125,7 @@ pub struct UserFundsDeposited {
 
 /// Emitted when a user withdraws unspent funds from their `UserProfile`.
 #[event]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UserFundsWithdrawn {
     /// The public key of the user (`ChainCard`) who made the withdrawal.
     pub authority: Pubkey,
@@ -141,7 +141,7 @@ pub struct UserFundsWithdrawn {
 
 /// Emitted when a `UserProfile` PDA is closed.
 #[event]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UserProfileClosed {
     /// The `ChainCard` public key of the user whose profile was closed.
     pub authority: Pubkey,
@@ -153,7 +153,7 @@ pub struct UserProfileClosed {
 
 /// Emitted when a user calls a service's command, potentially a paid one.
 #[event]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UserCommandDispatched {
     /// The public key of the user's `ChainCard`, who is the initiator of the command.
     pub sender: Pubkey,
@@ -171,7 +171,7 @@ pub struct UserCommandDispatched {
 
 /// A generic event for logging significant off-chain actions for auditing purposes.
 #[event]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OffChainActionLogged {
     /// The public key of the `ChainCard` (either User or Admin) that performed the off-chain action.
     pub actor: Pubkey,

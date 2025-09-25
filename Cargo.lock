@@ -7922,6 +7922,7 @@ dependencies = [
  "anchor-client",
  "anchor-lang",
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "bincode 2.0.1",
  "borsh 0.10.4",

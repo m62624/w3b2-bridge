@@ -1,78 +1,37 @@
-use crate::config::SyncConfig;
-use crate::events::BridgeEvent;
-use crate::storage::Storage;
-use crate::{catchup, live};
-use anyhow::Result;
-use tokio::sync::mpsc;
-use tokio_stream::{wrappers::ReceiverStream, Stream};
+// w3b2-connector/src/synchronizer.rs
+
+use crate::{
+    catchup::CatchupWorker, config::Config, events::BridgeEvent, live::LiveWorker,
+    storage::Storage, worker::WorkerContext,
+};
+use std::sync::Arc;
+use tokio::sync::broadcast;
 
 pub struct Synchronizer;
 
 impl Synchronizer {
-    pub fn builder() -> SynchronizerBuilder {
-        SynchronizerBuilder::default()
-    }
-}
+    /// Creates and runs both the catch-up and live workers in the background.
+    pub fn start(
+        config: Arc<Config>,
+        storage: Arc<dyn Storage>,
+        event_tx: broadcast::Sender<BridgeEvent>,
+    ) {
+        let context = WorkerContext::new(config, storage, event_tx);
 
-#[derive(Default)]
-pub struct SynchronizerBuilder {
-    config: Option<SyncConfig>,
-    storage: Option<Storage>,
-}
-
-impl SynchronizerBuilder {
-    pub fn with_config(mut self, config: SyncConfig) -> Self {
-        self.config = Some(config);
-        self
-    }
-
-    pub fn with_storage(mut self, storage: Storage) -> Self {
-        self.storage = Some(storage);
-        self
-    }
-
-    /// Задает максимальную глубину поиска в блоках для catch-up воркера.
-    /// Переопределяет значение из `SyncConfig`.
-    pub fn with_max_catchup_depth(mut self, depth: u64) -> Self {
-        if let Some(ref mut cfg) = self.config {
-            cfg.max_catchup_depth = Some(depth);
-        }
-        self
-    }
-
-    /// Запускает оба воркера (catch-up и live) и возвращает единый поток событий.
-    pub async fn start(self) -> Result<impl Stream<Item = BridgeEvent>> {
-        let config = self
-            .config
-            .ok_or_else(|| anyhow::anyhow!("Config not provided"))?;
-        let storage = self
-            .storage
-            .ok_or_else(|| anyhow::anyhow!("Storage not provided"))?;
-
-        // Создаем MPSC канал для объединения событий из обоих воркеров
-        let (tx, rx) = mpsc::channel(100);
-
-        // Запускаем catch-up воркер в отдельной задаче
-        let catchup_cfg = config.clone();
-        let catchup_storage = storage.clone();
-        let catchup_tx = tx.clone();
+        // Run the catch-up worker
+        let catchup_worker = CatchupWorker::new(context.clone());
         tokio::spawn(async move {
-            if let Err(e) = catchup::run_catchup(catchup_cfg, catchup_storage, catchup_tx).await {
+            if let Err(e) = catchup_worker.run().await {
                 tracing::error!("Catch-up worker failed: {}", e);
             }
         });
 
-        // Запускаем live воркер в отдельной задаче
-        let live_cfg = config;
-        let live_storage = storage;
-        let live_tx = tx;
+        // Run the live worker
+        let live_worker = LiveWorker::new(context);
         tokio::spawn(async move {
-            if let Err(e) = live::run_live(live_cfg, live_storage, live_tx).await {
+            if let Err(e) = live_worker.run().await {
                 tracing::error!("Live worker failed: {}", e);
             }
         });
-
-        // Возвращаем приемник канала, обернутый в Stream
-        Ok(ReceiverStream::new(rx))
     }
 }

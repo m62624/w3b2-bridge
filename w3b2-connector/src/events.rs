@@ -1,24 +1,33 @@
 use anyhow::Result;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use borsh::BorshDeserialize;
-use w3b2_bridge_program::events::{
-    AdminDeactivated, AdminRegistered, FundingRequested, UserDeactivated, UserRegistered,
-};
-use w3b2_bridge_program::events::{CommandEvent, FundingApproved};
 
-#[derive(Debug)]
+// Import all the on-chain event structs and give them a clear alias.
+use w3b2_bridge_program::events as OnChainEvent;
+
+/// A connector-side enum that wraps all possible on-chain events.
+/// This provides a single, unified type for the dispatcher to work with.
+#[derive(Debug, Clone)]
 pub enum BridgeEvent {
-    AdminRegistered(AdminRegistered),
-    UserRegistered(UserRegistered),
-    AdminDeactivated(AdminDeactivated),
-    UserDeactivated(UserDeactivated),
-    FundingRequested(FundingRequested),
-    FundingApproved(FundingApproved),
-    CommandEvent(CommandEvent),
+    AdminProfileRegistered(OnChainEvent::AdminProfileRegistered),
+    AdminCommKeyUpdated(OnChainEvent::AdminCommKeyUpdated),
+    AdminPricesUpdated(OnChainEvent::AdminPricesUpdated),
+    AdminFundsWithdrawn(OnChainEvent::AdminFundsWithdrawn),
+    AdminProfileClosed(OnChainEvent::AdminProfileClosed),
+    AdminCommandDispatched(OnChainEvent::AdminCommandDispatched),
+    UserProfileCreated(OnChainEvent::UserProfileCreated),
+    UserCommKeyUpdated(OnChainEvent::UserCommKeyUpdated),
+    UserFundsDeposited(OnChainEvent::UserFundsDeposited),
+    UserFundsWithdrawn(OnChainEvent::UserFundsWithdrawn),
+    UserProfileClosed(OnChainEvent::UserProfileClosed),
+    UserCommandDispatched(OnChainEvent::UserCommandDispatched),
+    OffChainActionLogged(OnChainEvent::OffChainActionLogged),
     Unknown,
 }
 
+/// Parses the raw event data from a log message.
+/// It identifies the event type by its 8-byte discriminator and deserializes
+/// the rest of the data into the corresponding struct.
 pub fn parse_event_data(data: &[u8]) -> Result<BridgeEvent> {
     if data.len() < 8 {
         return Ok(BridgeEvent::Unknown);
@@ -27,88 +36,72 @@ pub fn parse_event_data(data: &[u8]) -> Result<BridgeEvent> {
     let discriminator = &data[0..8];
     let event_data = &data[8..];
 
-    let admin_registered_disc =
-        anchor_lang::solana_program::hash::hash(b"event:AdminRegistered").to_bytes()[0..8].to_vec();
-    let user_registered_disc =
-        anchor_lang::solana_program::hash::hash(b"event:UserRegistered").to_bytes()[0..8].to_vec();
-    let admin_deactivated_disc = anchor_lang::solana_program::hash::hash(b"event:AdminDeactivated")
-        .to_bytes()[0..8]
-        .to_vec();
-    let user_deactivated_disc =
-        anchor_lang::solana_program::hash::hash(b"event:UserDeactivated").to_bytes()[0..8].to_vec();
-    let funding_requested_disc = anchor_lang::solana_program::hash::hash(b"event:FundingRequested")
-        .to_bytes()[0..8]
-        .to_vec();
-    let funding_approved_disc =
-        anchor_lang::solana_program::hash::hash(b"event:FundingApproved").to_bytes()[0..8].to_vec();
-    let command_event_disc =
-        anchor_lang::solana_program::hash::hash(b"event:CommandEvent").to_bytes()[0..8].to_vec();
-
-    if discriminator == admin_registered_disc.as_slice() {
-        let event = AdminRegistered::try_from_slice(event_data)?;
-        return Ok(BridgeEvent::AdminRegistered(event));
+    // This macro simplifies calculating the discriminator for each event.
+    macro_rules! get_disc {
+        ($name:literal) => {
+            anchor_lang::solana_program::hash::hash(format!("event:{}", $name).as_bytes())
+                .to_bytes()[0..8]
+                .to_vec()
+        };
     }
 
-    if discriminator == user_registered_disc.as_slice() {
-        let event = UserRegistered::try_from_slice(event_data)?;
-        return Ok(BridgeEvent::UserRegistered(event));
+    // Compare the discriminator from the log with the known discriminators.
+    if discriminator == get_disc!("AdminProfileRegistered").as_slice() {
+        let event = OnChainEvent::AdminProfileRegistered::try_from_slice(event_data)?;
+        Ok(BridgeEvent::AdminProfileRegistered(event))
+    } else if discriminator == get_disc!("AdminCommKeyUpdated").as_slice() {
+        let event = OnChainEvent::AdminCommKeyUpdated::try_from_slice(event_data)?;
+        Ok(BridgeEvent::AdminCommKeyUpdated(event))
+    } else if discriminator == get_disc!("AdminPricesUpdated").as_slice() {
+        let event = OnChainEvent::AdminPricesUpdated::try_from_slice(event_data)?;
+        Ok(BridgeEvent::AdminPricesUpdated(event))
+    } else if discriminator == get_disc!("AdminFundsWithdrawn").as_slice() {
+        let event = OnChainEvent::AdminFundsWithdrawn::try_from_slice(event_data)?;
+        Ok(BridgeEvent::AdminFundsWithdrawn(event))
+    } else if discriminator == get_disc!("AdminProfileClosed").as_slice() {
+        let event = OnChainEvent::AdminProfileClosed::try_from_slice(event_data)?;
+        Ok(BridgeEvent::AdminProfileClosed(event))
+    } else if discriminator == get_disc!("AdminCommandDispatched").as_slice() {
+        let event = OnChainEvent::AdminCommandDispatched::try_from_slice(event_data)?;
+        Ok(BridgeEvent::AdminCommandDispatched(event))
+    } else if discriminator == get_disc!("UserProfileCreated").as_slice() {
+        let event = OnChainEvent::UserProfileCreated::try_from_slice(event_data)?;
+        Ok(BridgeEvent::UserProfileCreated(event))
+    } else if discriminator == get_disc!("UserCommKeyUpdated").as_slice() {
+        let event = OnChainEvent::UserCommKeyUpdated::try_from_slice(event_data)?;
+        Ok(BridgeEvent::UserCommKeyUpdated(event))
+    } else if discriminator == get_disc!("UserFundsDeposited").as_slice() {
+        let event = OnChainEvent::UserFundsDeposited::try_from_slice(event_data)?;
+        Ok(BridgeEvent::UserFundsDeposited(event))
+    } else if discriminator == get_disc!("UserFundsWithdrawn").as_slice() {
+        let event = OnChainEvent::UserFundsWithdrawn::try_from_slice(event_data)?;
+        Ok(BridgeEvent::UserFundsWithdrawn(event))
+    } else if discriminator == get_disc!("UserProfileClosed").as_slice() {
+        let event = OnChainEvent::UserProfileClosed::try_from_slice(event_data)?;
+        Ok(BridgeEvent::UserProfileClosed(event))
+    } else if discriminator == get_disc!("UserCommandDispatched").as_slice() {
+        let event = OnChainEvent::UserCommandDispatched::try_from_slice(event_data)?;
+        Ok(BridgeEvent::UserCommandDispatched(event))
+    } else if discriminator == get_disc!("OffChainActionLogged").as_slice() {
+        let event = OnChainEvent::OffChainActionLogged::try_from_slice(event_data)?;
+        Ok(BridgeEvent::OffChainActionLogged(event))
+    } else {
+        Ok(BridgeEvent::Unknown)
     }
-
-    if discriminator == admin_deactivated_disc.as_slice() {
-        let event = AdminDeactivated::try_from_slice(event_data)?;
-        return Ok(BridgeEvent::AdminDeactivated(event));
-    }
-
-    if discriminator == user_deactivated_disc.as_slice() {
-        let event = UserDeactivated::try_from_slice(event_data)?;
-        return Ok(BridgeEvent::UserDeactivated(event));
-    }
-
-    if discriminator == funding_requested_disc.as_slice() {
-        let event = FundingRequested::try_from_slice(event_data)?;
-        return Ok(BridgeEvent::FundingRequested(event));
-    }
-
-    if discriminator == funding_approved_disc.as_slice() {
-        let event = FundingApproved::try_from_slice(event_data)?;
-        return Ok(BridgeEvent::FundingApproved(event));
-    }
-
-    if discriminator == command_event_disc.as_slice() {
-        let event = CommandEvent::try_from_slice(event_data)?;
-        return Ok(BridgeEvent::CommandEvent(event));
-    }
-
-    Ok(BridgeEvent::Unknown)
 }
 
-/// Попытка извлечь base64-пайс из строки логов и распарсить событие.
+/// Attempts to extract a base64 payload from a log line and parse it into an event.
+/// This function looks for the "Program data: " prefix added by `emit!`.
 pub fn try_parse_log(log: &str) -> Result<BridgeEvent> {
-    let candidates = if let Some(s) = log.strip_prefix("Program data: ") {
-        vec![s]
-    } else if let Some(s) = log.strip_prefix("Program log: ") {
-        vec![s]
-    } else {
-        vec![log]
-    };
-
-    for cand in candidates {
-        for raw_token in cand.split_whitespace() {
-            let token =
-                raw_token.trim_matches(|c: char| matches!(c, '"' | '\'' | '[' | ']' | ',' | ':'));
-            if token.len() < 12 {
-                continue;
-            }
-
-            if let Ok(bytes) = BASE64.decode(token) {
-                if let Ok(ev) = parse_event_data(&bytes) {
-                    if !matches!(ev, BridgeEvent::Unknown) {
-                        return Ok(ev);
-                    }
+    if let Some(data_str) = log.strip_prefix("Program data: ") {
+        if let Ok(bytes) = BASE64.decode(data_str.trim()) {
+            if let Ok(event) = parse_event_data(&bytes) {
+                // Only return successfully parsed, known events.
+                if !matches!(event, BridgeEvent::Unknown) {
+                    return Ok(event);
                 }
             }
         }
     }
-
     Ok(BridgeEvent::Unknown)
 }

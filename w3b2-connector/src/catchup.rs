@@ -1,94 +1,106 @@
+// w3b2-connector/src/catchup.rs
+
+use crate::events::{try_parse_log, BridgeEvent};
+use crate::worker::WorkerContext;
 use anyhow::Result;
-use solana_client::rpc_client::GetConfirmedSignaturesForAddress2Config;
-use solana_client::rpc_config::RpcTransactionConfig;
-use solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
-use solana_sdk::signature::Signature;
-use tokio::sync::mpsc;
+use solana_client::{
+    nonblocking::rpc_client::RpcClient, rpc_client::GetConfirmedSignaturesForAddress2Config,
+    rpc_config::RpcTransactionConfig, rpc_response::RpcConfirmedTransactionStatusWithSignature,
+};
+use solana_sdk::{commitment_config::CommitmentConfig, signature::Signature};
+use solana_transaction_status::UiTransactionEncoding;
 use tokio::time::{sleep, Duration};
 
-use crate::config::SyncConfig;
-use crate::storage::Storage;
-use crate::{events::try_parse_log, events::BridgeEvent};
-use solana_client::nonblocking::rpc_client::RpcClient;
-use solana_client::rpc_response::RpcConfirmedTransactionStatusWithSignature;
-use solana_transaction_status::UiTransactionEncoding;
+pub struct CatchupWorker {
+    ctx: WorkerContext,
+    program_id: solana_sdk::pubkey::Pubkey,
+    client: RpcClient,
+}
 
-const SIGNATURE_FETCH_LIMIT: usize = 1000;
+impl CatchupWorker {
+    pub fn new(ctx: WorkerContext) -> Self {
+        let client = RpcClient::new(ctx.config.solana.rpc_url.clone());
+        let program_id = w3b2_bridge_program::ID;
+        Self {
+            ctx,
+            program_id,
+            client,
+        }
+    }
 
-/// catch-up worker
-pub async fn run_catchup(
-    cfg: SyncConfig,
-    storage: Storage,
-    sender: mpsc::Sender<BridgeEvent>,
-) -> Result<()> {
-    let client = RpcClient::new(cfg.rpc_url.clone());
-    let program_id: solana_sdk::pubkey::Pubkey = w3b2_bridge_program::ID;
+    /// Runs the main catch-up loop.
+    /// In each iteration, it fetches new signatures and processes them.
+    pub async fn run(&self) -> Result<()> {
+        loop {
+            // The logic is now broken into smaller, more manageable pieces.
+            let signatures = self.fetch_new_signatures().await?;
+            if !signatures.is_empty() {
+                tracing::info!("Found {} new signatures to process.", signatures.len());
+                self.process_signatures(signatures).await?;
+            }
 
-    loop {
+            let poll_interval = self.ctx.config.synchronizer.poll_interval_secs;
+            sleep(Duration::from_secs(poll_interval)).await;
+        }
+    }
+
+    /// Fetches signatures in pages until it finds the last one we processed.
+    async fn fetch_new_signatures(
+        &self,
+    ) -> Result<Vec<RpcConfirmedTransactionStatusWithSignature>> {
         let mut before_sig: Option<Signature> = None;
-        let last_known_sig_str = storage.get_last_sig();
-        let mut signatures_to_process: Vec<RpcConfirmedTransactionStatusWithSignature> = Vec::new();
-        let mut fetched_count = 0;
+        let last_known_sig = self.ctx.storage.get_last_sig().await?;
+        let mut signatures_to_process = Vec::new();
 
         tracing::info!(
             "Starting catch-up from last known signature: {:?}",
-            last_known_sig_str
+            last_known_sig
         );
 
-        // постраничная загрузка
         'fetch_loop: loop {
-            let sigs = client
-                .get_signatures_for_address_with_config(
-                    &program_id,
-                    GetConfirmedSignaturesForAddress2Config {
-                        before: before_sig,
-                        until: None,
-                        limit: Some(SIGNATURE_FETCH_LIMIT),
-                        commitment: Some(CommitmentConfig {
-                            commitment: cfg.commitment.unwrap_or(CommitmentLevel::Confirmed),
-                        }),
-                    },
-                )
+            let sig_config = GetConfirmedSignaturesForAddress2Config {
+                before: before_sig,
+                until: None,
+                limit: Some(self.ctx.config.synchronizer.max_signature_fetch),
+                commitment: Some(CommitmentConfig {
+                    commitment: self.ctx.config.solana.commitment,
+                }),
+            };
+
+            let sigs = self
+                .client
+                .get_signatures_for_address_with_config(&self.program_id, sig_config)
                 .await?;
 
             if sigs.is_empty() {
                 break 'fetch_loop;
             }
-
             before_sig = sigs.last().and_then(|s| s.signature.parse().ok());
 
-            // ищем последнюю известную сигнатуру
-            if let Some(ref last_sig) = last_known_sig_str {
+            if let Some(ref last_sig) = last_known_sig {
                 if let Some(pos) = sigs.iter().position(|s| &s.signature == last_sig) {
                     signatures_to_process.extend_from_slice(&sigs[..pos]);
                     break 'fetch_loop;
                 }
             }
-
             signatures_to_process.extend(sigs);
-            fetched_count += signatures_to_process.len();
-
-            // лимит по количеству сигнатур
-            if let Some(max_sig_count) = cfg.max_signature_fetch {
-                if fetched_count >= max_sig_count {
-                    break 'fetch_loop;
-                }
-            }
         }
 
-        // от старых к новым
+        // Process from oldest to newest.
         signatures_to_process.reverse();
+        Ok(signatures_to_process)
+    }
 
-        let current_slot = if cfg.max_catchup_depth.is_some() {
-            Some(client.get_slot().await?)
-        } else {
-            None
-        };
+    /// Iterates through a batch of signatures and processes each one individually.
+    async fn process_signatures(
+        &self,
+        signatures: Vec<RpcConfirmedTransactionStatusWithSignature>,
+    ) -> Result<()> {
+        let current_slot = self.client.get_slot().await?;
 
-        for sig_info in signatures_to_process {
-            // проверка по глубине слота
-            if let (Some(max_depth), Some(curr_slot)) = (cfg.max_catchup_depth, current_slot) {
-                if sig_info.slot < curr_slot.saturating_sub(max_depth) {
+        for sig_info in signatures {
+            if let Some(max_depth) = self.ctx.config.synchronizer.max_catchup_depth {
+                if sig_info.slot < current_slot.saturating_sub(max_depth) {
                     tracing::debug!(
                         "Skipping {} from slot {} due to max_catchup_depth",
                         sig_info.signature,
@@ -98,53 +110,58 @@ pub async fn run_catchup(
                 }
             }
 
-            let sig = sig_info.signature.parse::<Signature>()?;
-            match client
-                .get_transaction_with_config(
-                    &sig,
-                    RpcTransactionConfig {
-                        encoding: Some(UiTransactionEncoding::Base64),
-                        commitment: Some(CommitmentConfig {
-                            commitment: cfg.commitment.unwrap_or(CommitmentLevel::Confirmed),
-                        }),
-                        max_supported_transaction_version: Some(0),
-                    },
-                )
-                .await
-            {
-                Ok(tx) => {
-                    if let Some(block_time) = tx.block_time {
-                        let age_seconds = cfg.time_provider.timestamp().saturating_sub(block_time);
-                        let max_age_seconds = cfg.max_request_age_minutes as i64 * 60;
-                        if age_seconds > max_age_seconds {
-                            tracing::debug!("Skipping {} due to age", sig);
-                            storage.set_last_slot(tx.slot);
-                            storage.set_last_sig(&sig.to_string());
-                            continue;
-                        }
-                    }
+            self.process_one_transaction(&sig_info).await?;
+        }
+        Ok(())
+    }
 
-                    if let Some(meta) = tx.transaction.meta {
-                        if let Some(logs) = Option::<Vec<String>>::from(meta.log_messages) {
-                            for l in logs {
-                                if let Ok(ev) = try_parse_log(&l) {
-                                    if !matches!(ev, BridgeEvent::Unknown) {
-                                        if sender.send(ev).await.is_err() {
-                                            return Err(anyhow::anyhow!("MPSC channel closed"));
-                                        }
+    /// Fetches a single transaction, parses its logs for events, and sends them.
+    /// CRITICAL FIX: Updates storage state after each transaction.
+    async fn process_one_transaction(
+        &self,
+        sig_info: &RpcConfirmedTransactionStatusWithSignature,
+    ) -> Result<()> {
+        let sig = sig_info.signature.parse::<Signature>()?;
+        let tx_config = RpcTransactionConfig {
+            encoding: Some(UiTransactionEncoding::Base64),
+            commitment: Some(CommitmentConfig {
+                commitment: self.ctx.config.solana.commitment,
+            }),
+            max_supported_transaction_version: Some(0),
+        };
+
+        match self
+            .client
+            .get_transaction_with_config(&sig, tx_config)
+            .await
+        {
+            Ok(tx) => {
+                if let Some(meta) = tx.transaction.meta {
+                    if let solana_transaction_status::option_serializer::OptionSerializer::Some(
+                        logs,
+                    ) = meta.log_messages
+                    {
+                        for log in logs {
+                            if let Ok(event) = try_parse_log(&log) {
+                                if !matches!(event, BridgeEvent::Unknown) {
+                                    if self.ctx.event_sender.send(event).is_err() {
+                                        tracing::warn!(
+                                            "No active receivers for broadcast channel."
+                                        );
                                     }
                                 }
                             }
                         }
                     }
-
-                    storage.set_last_slot(tx.slot);
-                    storage.set_last_sig(&sig.to_string());
                 }
-                Err(e) => tracing::error!("Failed to get transaction {}: {}", sig, e),
-            }
-        }
 
-        sleep(Duration::from_secs(cfg.poll_interval_secs.unwrap_or(3))).await;
+                self.ctx
+                    .storage
+                    .set_sync_state(tx.slot, &sig_info.signature)
+                    .await?;
+            }
+            Err(e) => tracing::error!("Failed to get transaction {}: {}", sig, e),
+        }
+        Ok(())
     }
 }
