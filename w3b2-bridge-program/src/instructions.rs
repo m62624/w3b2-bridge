@@ -199,7 +199,7 @@ pub fn user_deposit(ctx: Context<UserDeposit>, amount: u64) -> Result<()> {
     // Update the internal deposit balance state.
     user_profile.deposit_balance += amount;
 
-    emit!(FundsDeposited {
+    emit!(UserFundsDeposited {
         authority: user_profile.authority,
         amount,
         new_deposit_balance: user_profile.deposit_balance,
@@ -234,7 +234,7 @@ pub fn user_withdraw(ctx: Context<UserWithdraw>, amount: u64) -> Result<()> {
     // Update the internal deposit balance state.
     user_profile.deposit_balance -= amount;
 
-    emit!(FundsWithdrawn {
+    emit!(UserFundsWithdrawn {
         authority: user_profile.authority,
         amount,
         destination: destination.key(),

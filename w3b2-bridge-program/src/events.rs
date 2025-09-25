@@ -112,7 +112,7 @@ pub struct UserCommKeyUpdated {
 /// Emitted when a user deposits funds into their `UserProfile` to pay for services.
 #[event]
 #[derive(Debug)]
-pub struct FundsDeposited {
+pub struct UserFundsDeposited {
     /// The public key of the user (`ChainCard`) who made the deposit.
     pub authority: Pubkey,
     /// The amount of lamports deposited into the `UserProfile`.
@@ -126,7 +126,7 @@ pub struct FundsDeposited {
 /// Emitted when a user withdraws unspent funds from their `UserProfile`.
 #[event]
 #[derive(Debug)]
-pub struct FundsWithdrawn {
+pub struct UserFundsWithdrawn {
     /// The public key of the user (`ChainCard`) who made the withdrawal.
     pub authority: Pubkey,
     /// The amount of lamports withdrawn from the `UserProfile`.
