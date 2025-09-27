@@ -1,12 +1,10 @@
-// w3b2-connector/src/catchup.rs
-
 use crate::{
     events::{try_parse_log, BridgeEvent},
     workers::WorkerContext,
 };
 use anyhow::Result;
+use solana_client::rpc_client::GetConfirmedSignaturesForAddress2Config;
 use solana_client::{
-    nonblocking::rpc_client::RpcClient, rpc_client::GetConfirmedSignaturesForAddress2Config,
     rpc_config::RpcTransactionConfig, rpc_response::RpcConfirmedTransactionStatusWithSignature,
 };
 use solana_sdk::{commitment_config::CommitmentConfig, signature::Signature};
@@ -16,18 +14,12 @@ use tokio::time::{sleep, Duration};
 pub struct CatchupWorker {
     ctx: WorkerContext,
     program_id: solana_sdk::pubkey::Pubkey,
-    client: RpcClient,
 }
 
 impl CatchupWorker {
     pub fn new(ctx: WorkerContext) -> Self {
-        let client = RpcClient::new(ctx.config.solana.rpc_url.clone());
         let program_id = w3b2_bridge_program::ID;
-        Self {
-            ctx,
-            program_id,
-            client,
-        }
+        Self { ctx, program_id }
     }
 
     /// Runs the main catch-up loop.
@@ -70,7 +62,8 @@ impl CatchupWorker {
             };
 
             let sigs = self
-                .client
+                .ctx
+                .rpc_client
                 .get_signatures_for_address_with_config(&self.program_id, sig_config)
                 .await?;
 
@@ -98,7 +91,7 @@ impl CatchupWorker {
         &self,
         signatures: Vec<RpcConfirmedTransactionStatusWithSignature>,
     ) -> Result<()> {
-        let current_slot = self.client.get_slot().await?;
+        let current_slot = self.ctx.rpc_client.get_slot().await?;
 
         for sig_info in signatures {
             if let Some(max_depth) = self.ctx.config.synchronizer.max_catchup_depth {
@@ -118,7 +111,6 @@ impl CatchupWorker {
     }
 
     /// Fetches a single transaction, parses its logs for events, and sends them.
-    /// CRITICAL FIX: Updates storage state after each transaction.
     async fn process_one_transaction(
         &self,
         sig_info: &RpcConfirmedTransactionStatusWithSignature,
@@ -133,7 +125,8 @@ impl CatchupWorker {
         };
 
         match self
-            .client
+            .ctx
+            .rpc_client
             .get_transaction_with_config(&sig, tx_config)
             .await
         {

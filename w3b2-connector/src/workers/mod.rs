@@ -3,7 +3,7 @@ mod live;
 mod synchronizer;
 
 use crate::{
-    config::Config,
+    config::ConnectorConfig,
     dispatcher::Dispatcher,
     events::BridgeEvent,
     listener::{AdminListener, UserListener},
@@ -18,7 +18,7 @@ use tokio::sync::{broadcast, mpsc};
 /// A shared context containing all dependencies required by the workers.
 #[derive(Clone)]
 pub struct WorkerContext {
-    pub config: Arc<Config>,
+    pub config: Arc<ConnectorConfig>,
     pub storage: Arc<dyn Storage>,
     pub rpc_client: Arc<RpcClient>,
     pub event_sender: broadcast::Sender<BridgeEvent>,
@@ -26,11 +26,11 @@ pub struct WorkerContext {
 
 impl WorkerContext {
     pub fn new(
-        config: Arc<Config>,
+        config: Arc<ConnectorConfig>,
+        rpc_client: Arc<RpcClient>,
         storage: Arc<dyn Storage>,
         event_sender: broadcast::Sender<BridgeEvent>,
     ) -> Self {
-        let rpc_client = Arc::new(RpcClient::new(config.solana.rpc_url.clone()));
         Self {
             config,
             storage,
@@ -47,14 +47,14 @@ type RegistrationTx = mpsc::Sender<(Pubkey, mpsc::Sender<BridgeEvent>)>;
 /// high-level, contextual event listeners. This is the primary entry point for users
 /// of the library.
 pub struct EventManager {
-    // Renamed from EventWorker for clarity
     registration_tx: RegistrationTx,
 }
 
 impl EventManager {
     /// Creates a new EventManager and starts all background services.
     pub fn new(
-        config: Arc<Config>,
+        config: Arc<ConnectorConfig>,
+        rpc_client: Arc<RpcClient>,
         storage: Arc<dyn Storage>,
         broadcast_capacity: usize,
         registration_capacity: usize,
@@ -67,7 +67,7 @@ impl EventManager {
             dispatcher.run().await;
         });
 
-        Synchronizer::start(config, storage, event_tx);
+        Synchronizer::start(config, rpc_client, storage, event_tx);
 
         tracing::info!("EventManager initialized and background services are running.");
 

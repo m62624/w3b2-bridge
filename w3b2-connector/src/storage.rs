@@ -1,5 +1,3 @@
-// w3b2-connector/src/storage/mod.rs
-
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use sled::transaction::TransactionalTree;

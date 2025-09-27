@@ -1,5 +1,3 @@
-// w3b2-connector/src/live.rs
-
 use anyhow::Result;
 use solana_client::{
     nonblocking::pubsub_client::PubsubClient,

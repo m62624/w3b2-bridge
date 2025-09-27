@@ -1,5 +1,3 @@
-// w3b2-connector/src/grpc_server.rs
-
 use crate::config::Config;
 use crate::events::BridgeEvent as ConnectorEvent;
 use anyhow::Result;
