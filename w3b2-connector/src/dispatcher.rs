@@ -1,26 +1,42 @@
-// w3b2-connector/src/dispatcher.rs
-
+/// # Event Dispatcher
+///
+/// The `Dispatcher` is a background worker that routes on-chain events from the global
+/// "firehose" stream into clean, filtered streams for specific listeners.
+///
+/// ## What Problem It Solves
+/// Instead of every `UserListener` or `AdminListener` scanning through thousands of
+/// irrelevant events, the `Dispatcher` inspects each incoming event and forwards it only
+/// to the listeners that care about the involved public keys.
+///
+/// ## Why Separate
+/// The `Dispatcher` runs continuously in the background, maintaining subscriptions and
+/// routing logic. This separation keeps the public-facing `EventManager` simple and
+/// allows safe, concurrent event handling.
+///
+/// ## Extensibility
+/// Any other service (e.g. gRPC streaming, audit logging) can hook into the raw broadcast
+/// channel from the `Synchronizer`, bypassing the dispatcher entirely if unfiltered access
+/// is needed.
 use crate::events::BridgeEvent;
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
 use tokio::sync::{broadcast, mpsc};
 
 /// The Dispatcher is responsible for receiving all events from the Synchronizer
-/// and routing them to the appropriate ChainCard worker based on the public keys
+/// and routing them to the appropriate listeners based on the public keys
 /// involved in the event.
 pub struct Dispatcher {
-    // This receives all events from the Synchronizer.
+    // This receives all events from the Synchronizer's broadcast channel.
     event_rx: broadcast::Receiver<BridgeEvent>,
-    // This now stores the channels for dynamically added listeners.
+    // This stores the dedicated channels for listeners who have subscribed.
     listeners: HashMap<Pubkey, mpsc::Sender<BridgeEvent>>,
-    // ADDED: A channel to receive requests to add new listeners.
+    // This receives requests from the EventManager to add new listeners.
     registration_rx: mpsc::Receiver<(Pubkey, mpsc::Sender<BridgeEvent>)>,
 }
 
 impl Dispatcher {
     pub fn new(
         event_rx: broadcast::Receiver<BridgeEvent>,
-        // We can start with an empty map because listeners will be added dynamically.
         initial_listeners: HashMap<Pubkey, mpsc::Sender<BridgeEvent>>,
         registration_rx: mpsc::Receiver<(Pubkey, mpsc::Sender<BridgeEvent>)>,
     ) -> Self {
@@ -37,7 +53,6 @@ impl Dispatcher {
         loop {
             tokio::select! {
                 // Case 1: An event arrived from the blockchain.
-                // This logic is the same as in your original code.
                 Ok(event) = self.event_rx.recv() => {
                     let relevant_pubkeys = extract_pubkeys_from_event(&event);
                     for pubkey in relevant_pubkeys {
@@ -49,7 +64,7 @@ impl Dispatcher {
                     }
                 },
 
-                // Case 2 (NEW): A request to add a new listener arrived from EventManager.
+                // Case 2: A request to add a new listener arrived from the EventManager.
                 Some((pubkey, tx)) = self.registration_rx.recv() => {
                     tracing::info!("Dispatcher: Registering new listener for {}", pubkey);
                     self.listeners.insert(pubkey, tx);
@@ -66,8 +81,6 @@ impl Dispatcher {
 }
 
 /// Helper function to extract all relevant public keys from an event.
-/// An event is relevant to a ChainCard if its public key is mentioned as a
-/// sender, receiver, authority, etc.
 fn extract_pubkeys_from_event(event: &BridgeEvent) -> Vec<Pubkey> {
     use w3b2_bridge_program::events as OnChainEvent;
     match event {

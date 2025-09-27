@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use w3b2_connector::{
     config::Config,
-    grpc_server,
     storage::{SledStorage, Storage},
 };
 

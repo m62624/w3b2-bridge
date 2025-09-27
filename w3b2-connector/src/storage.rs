@@ -6,7 +6,7 @@ use sled::transaction::TransactionalTree;
 use sled::Db;
 
 /// A trait defining the required functionality for a persistent storage backend.
-/// This allows for different database implementations (e.g., Sled, Postgres).
+/// This allows for different database implementations.
 #[async_trait]
 pub trait Storage: Send + Sync {
     /// Retrieves the last synchronized slot number from the storage.
