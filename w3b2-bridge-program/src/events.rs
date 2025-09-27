@@ -1,5 +1,7 @@
 use anchor_lang::prelude::*;
 
+use crate::state::PriceEntry;
+
 // --- Admin Events ---
 
 /// Emitted when a new AdminProfile PDA is created.
@@ -36,7 +38,7 @@ pub struct AdminPricesUpdated {
     /// The public key of the `AdminProfile`'s owner (`ChainCard`).
     pub authority: Pubkey,
     /// A vector of tuples `(command_id, price)` representing the new price list for the service.
-    pub new_prices: Vec<(u16, u64)>,
+    pub new_prices: Vec<PriceEntry>,
     /// The Unix timestamp of the price update.
     pub ts: i64,
 }

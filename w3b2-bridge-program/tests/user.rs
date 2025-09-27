@@ -12,7 +12,7 @@ use instructions::*;
 use solana_program::native_token::LAMPORTS_PER_SOL;
 use solana_program::sysvar::rent::Rent;
 use solana_sdk::signature::Signer;
-use w3b2_bridge_program::state::{AdminProfile, UserProfile};
+use w3b2_bridge_program::state::{AdminProfile, PriceEntry, UserProfile};
 
 /// Tests the successful creation of a `UserProfile` PDA.
 ///
@@ -374,7 +374,7 @@ fn test_user_dispatch_command_success() {
     admin::update_prices(
         &mut svm,
         &admin_authority,
-        vec![(command_id_to_call, command_price)],
+        vec![PriceEntry::new(command_id_to_call, command_price)],
     );
 
     let user_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);

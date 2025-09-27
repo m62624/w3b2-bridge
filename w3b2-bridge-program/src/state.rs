@@ -19,7 +19,7 @@ pub struct AdminProfile {
     pub communication_pubkey: Pubkey,
     /// A dynamic list of `(command_id, price)` tuples that defines the cost
     /// in lamports for various off-chain services.
-    pub prices: Vec<(u16, u64)>,
+    pub prices: Vec<PriceEntry>,
     /// The internal balance in lamports where fees from paid user commands are collected.
     /// This balance can be withdrawn by the admin.
     pub balance: u64,
@@ -91,11 +91,26 @@ pub struct AdminUpdatePrices<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Represents a single entry in an admin's price list.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Debug)]
+pub struct PriceEntry {
+    /// Identifier of the command (stable u16).
+    pub command_id: u16,
+    /// Price in lamports.
+    pub price: u64,
+}
+
+impl PriceEntry {
+    pub fn new(command_id: u16, price: u64) -> Self {
+        Self { command_id, price }
+    }
+}
+
 /// A container struct for instruction arguments that involve a `Vec`.
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct UpdatePricesArgs {
     /// The new price list to set for the admin's services.
-    pub new_prices: Vec<(u16, u64)>,
+    pub new_prices: Vec<PriceEntry>,
 }
 
 /// Defines the accounts for the `admin_withdraw` instruction.

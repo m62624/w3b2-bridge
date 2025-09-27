@@ -56,10 +56,10 @@ pub fn admin_close_profile(ctx: Context<AdminCloseProfile>) -> Result<()> {
 /// to accommodate the new list size.
 pub fn admin_update_prices(
     ctx: Context<AdminUpdatePrices>,
-    mut new_prices: Vec<(u16, u64)>,
+    mut new_prices: Vec<PriceEntry>,
 ) -> Result<()> {
-    new_prices.sort_unstable_by_key(|k| k.0);
-    new_prices.dedup_by_key(|k| k.0);
+    new_prices.sort_unstable_by_key(|k| k.command_id);
+    new_prices.dedup_by_key(|k| k.command_id);
     ctx.accounts.admin_profile.prices = new_prices.clone();
     emit!(AdminPricesUpdated {
         authority: ctx.accounts.authority.key(),
@@ -264,9 +264,9 @@ pub fn user_dispatch_command(
 
     let command_price = match admin_profile
         .prices
-        .binary_search_by_key(&command_id, |&(id, _)| id)
+        .binary_search_by_key(&command_id, |id| id.command_id)
     {
-        Ok(index) => admin_profile.prices[index].1,
+        Ok(index) => admin_profile.prices[index].price,
         Err(_) => 0,
     };
 

@@ -12,7 +12,7 @@ use instructions::*;
 use solana_program::native_token::LAMPORTS_PER_SOL;
 use solana_program::sysvar::rent::Rent;
 use solana_sdk::signature::Signer;
-use w3b2_bridge_program::state::{AdminProfile, UserProfile};
+use w3b2_bridge_program::state::{AdminProfile, PriceEntry, UserProfile};
 
 /// Tests the successful creation of an `AdminProfile` PDA.
 ///
@@ -191,7 +191,11 @@ fn test_admin_update_prices_success() {
 
     let admin_pda = admin::create_profile(&mut svm, &authority, comm_key.pubkey());
 
-    let new_prices = vec![(1, 1000), (2, 2500), (5, 10000)];
+    let new_prices = vec![
+        PriceEntry::new(1, 1000),
+        PriceEntry::new(2, 2500),
+        PriceEntry::new(5, 10000),
+    ];
 
     let account_before = svm.get_account(&admin_pda).unwrap();
     let size_before = account_before.data.len();
@@ -344,7 +348,11 @@ fn test_admin_withdraw_success() {
     let admin_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);
     let admin_pda = admin::create_profile(&mut svm, &admin_authority, create_keypair().pubkey());
     let command_price = LAMPORTS_PER_SOL;
-    admin::update_prices(&mut svm, &admin_authority, vec![(1, command_price)]);
+    admin::update_prices(
+        &mut svm,
+        &admin_authority,
+        vec![PriceEntry::new(1, command_price)],
+    );
 
     // Create a User who will pay the Admin
     let user_authority = create_funded_keypair(&mut svm, 10 * LAMPORTS_PER_SOL);

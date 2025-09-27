@@ -18,15 +18,9 @@ tokio.workspace = true
 tokio-stream.workspace = true
 w3b2-bridge-program.workspace = true
 
-anchor-client = "0.31.1"
+anchor-client = { version = "0.31.1", features = ["async"] }
 base64 = "0.22.1"
-chrono = { version = "0.4.42", features = ["serde"] }
-prost = "0.12"
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.20", features = ["json"] }
-tonic = { version = "0.11", features = ["transport", "codegen"] }
-toml = "0.9.5"
-clap = { version = "4.5.47", features = ["derive"] }
 async-trait = "0.1.89"
 bip39 = { version = "2.2.0", features = ["rand"] }
 secrecy = "0.10.3"
@@ -39,5 +33,5 @@ dashmap = "6.1.0"
 [dev-dependencies]
 dirs = "6.0.0"
 
-[build-dependencies]
-tonic-build = "0.11"
+# [build-dependencies]
+# tonic-build = "0.11"
