@@ -19,7 +19,7 @@ use errors::*;
 use events::*;
 use state::*;
 
-declare_id!("w3b2d133a2a61a7a1a2b1b3c1d1e1f1a1b2c3d4e5f6");
+declare_id!("3LhCu6pXXdiwpvBUrFKLxCy1XQ5qyE7v6WSCLbkbS8Dr");
 
 /// Defines the primary instruction interface for the W3B2 Bridge program.
 /// Each public function in this module corresponds to a callable on-chain instruction.

@@ -17,7 +17,7 @@ use tokio::sync::{broadcast, mpsc};
 
 /// A shared context containing all dependencies required by the workers.
 #[derive(Clone)]
-pub struct WorkerContext {
+struct WorkerContext {
     pub config: Arc<ConnectorConfig>,
     pub storage: Arc<dyn Storage>,
     pub rpc_client: Arc<RpcClient>,
@@ -25,7 +25,7 @@ pub struct WorkerContext {
 }
 
 impl WorkerContext {
-    pub fn new(
+    fn new(
         config: Arc<ConnectorConfig>,
         rpc_client: Arc<RpcClient>,
         storage: Arc<dyn Storage>,
@@ -40,39 +40,55 @@ impl WorkerContext {
     }
 }
 
-// A channel for sending new subscription requests to the running Dispatcher.
-type RegistrationTx = mpsc::Sender<(Pubkey, mpsc::Sender<BridgeEvent>)>;
-
 /// The main library client, which manages the connection to Solana and provides
 /// high-level, contextual event listeners. This is the primary entry point for users
 /// of the library.
 pub struct EventManager {
-    registration_tx: RegistrationTx,
+    synchronizer: Synchronizer,
+    dispatcher: Dispatcher,
+    pub registration_tx: mpsc::Sender<(Pubkey, mpsc::Sender<BridgeEvent>)>,
 }
 
 impl EventManager {
-    /// Creates a new EventManager and starts all background services.
     pub fn new(
         config: Arc<ConnectorConfig>,
         rpc_client: Arc<RpcClient>,
         storage: Arc<dyn Storage>,
+        // Capacities are now arguments for better control by the binary.
         broadcast_capacity: usize,
         registration_capacity: usize,
     ) -> Self {
         let (event_tx, event_rx) = broadcast::channel(broadcast_capacity);
         let (reg_tx, reg_rx) = mpsc::channel(registration_capacity);
 
-        let mut dispatcher = Dispatcher::new(event_rx, HashMap::new(), reg_rx);
-        tokio::spawn(async move {
-            dispatcher.run().await;
-        });
+        let synchronizer = Synchronizer::new(
+            config.clone(),
+            rpc_client.clone(),
+            storage.clone(),
+            event_tx,
+        );
 
-        Synchronizer::start(config, rpc_client, storage, event_tx);
-
-        tracing::info!("EventManager initialized and background services are running.");
+        let dispatcher = Dispatcher::new(event_rx, HashMap::new(), reg_rx);
 
         Self {
+            synchronizer,
+            dispatcher,
             registration_tx: reg_tx,
+        }
+    }
+
+    /// Runs all background services of the connector.
+    /// This method should be spawned as a background task by the application.
+    pub async fn run(mut self) {
+        tracing::info!("Connector is running all background services.");
+        // We can run them in a select loop to shut down if one of them fails.
+        tokio::select! {
+            _ = self.synchronizer.run() => {
+                tracing::error!("Synchronizer exited unexpectedly.");
+            },
+            _ = self.dispatcher.run() => {
+                tracing::error!("Dispatcher exited unexpectedly.");
+            }
         }
     }
 

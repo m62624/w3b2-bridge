@@ -103,7 +103,6 @@ impl Crypto {
 /// Represents an unlocked ChainCard — contains a `Keypair` and associated metadata.
 #[derive(Debug)]
 pub struct ChainCard {
-    pub pubkey: Pubkey,
     keypair: Keypair,
     pub metadata: HashMap<String, String>,
 }
@@ -112,6 +111,10 @@ impl ChainCard {
     /// Borrow the underlying `Keypair`.
     pub fn keypair(&self) -> &Keypair {
         &self.keypair
+    }
+
+    pub fn authority(&self) -> Pubkey {
+        self.keypair.pubkey()
     }
 }
 
@@ -137,11 +140,7 @@ impl ChainCardFactory {
             .map_err(|e| anyhow!("Failed to derive keypair: {}", e))?;
 
         // 4. Construct ChainCard.
-        let card = ChainCard {
-            pubkey: keypair.pubkey(),
-            keypair,
-            metadata,
-        };
+        let card = ChainCard { keypair, metadata };
 
         Ok((card, mnemonic_phrase))
     }
@@ -159,186 +158,182 @@ impl ChainCardFactory {
         let keypair = keypair_from_seed(seed.as_ref())
             .map_err(|e| anyhow!("Failed to derive keypair: {}", e))?;
 
-        Ok(ChainCard {
-            pubkey: keypair.pubkey(),
-            keypair,
-            metadata,
-        })
+        Ok(ChainCard { keypair, metadata })
     }
 }
 
-/// Stored representation persisted to sled.
-#[derive(Debug, Serialize, Deserialize)]
-struct StorableCard {
-    encrypted_mnemonic_phrase: Vec<u8>,
-    salt: String,
-    nonce: Vec<u8>,
-    metadata: HashMap<String, String>,
-}
+// /// Stored representation persisted to sled.
+// #[derive(Debug, Serialize, Deserialize)]
+// struct StorableCard {
+//     encrypted_mnemonic_phrase: Vec<u8>,
+//     salt: String,
+//     nonce: Vec<u8>,
+//     metadata: HashMap<String, String>,
+// }
 
-/// Metadata update operations.
-#[derive(Debug)]
-pub enum MetadataUpdate {
-    Replace(HashMap<String, String>),
-    Set(String, String),
-    Delete(String),
-}
+// /// Metadata update operations.
+// #[derive(Debug)]
+// pub enum MetadataUpdate {
+//     Replace(HashMap<String, String>),
+//     Set(String, String),
+//     Delete(String),
+// }
 
-/// Keystore trait.
-#[async_trait::async_trait]
-pub trait Keystore: Send + Sync {
-    async fn create_new_card(
-        &self,
-        id: &str,
-        password: SecretString,
-        bip39_passphrase: Option<SecretString>,
-        metadata: HashMap<String, String>,
-    ) -> Result<(ChainCard, SecretString)>;
+// /// Keystore trait.
+// #[async_trait::async_trait]
+// pub trait Keystore: Send + Sync {
+//     async fn create_new_card(
+//         &self,
+//         id: &str,
+//         password: SecretString,
+//         bip39_passphrase: Option<SecretString>,
+//         metadata: HashMap<String, String>,
+//     ) -> Result<(ChainCard, SecretString)>;
 
-    async fn load_card(
-        &self,
-        id: &str,
-        password: SecretString,
-        bip39_passphrase: Option<SecretString>,
-    ) -> Result<ChainCard>;
+//     async fn load_card(
+//         &self,
+//         id: &str,
+//         password: SecretString,
+//         bip39_passphrase: Option<SecretString>,
+//     ) -> Result<ChainCard>;
 
-    async fn list_cards(&self) -> Result<HashMap<String, HashMap<String, String>>>;
-    async fn update_metadata(&self, id: &str, update: MetadataUpdate) -> Result<()>;
-    async fn delete_card(&self, id: &str) -> Result<()>;
-}
+//     async fn list_cards(&self) -> Result<HashMap<String, HashMap<String, String>>>;
+//     async fn update_metadata(&self, id: &str, update: MetadataUpdate) -> Result<()>;
+//     async fn delete_card(&self, id: &str) -> Result<()>;
+// }
 
-/// Sled-backed keystore.
-#[derive(Clone)]
-pub struct SledKeystore {
-    db: sled::Db,
-}
+// /// Sled-backed keystore.
+// #[derive(Clone)]
+// pub struct SledKeystore {
+//     db: sled::Db,
+// }
 
-impl SledKeystore {
-    pub fn new(db: sled::Db) -> Self {
-        Self { db }
-    }
-}
+// impl SledKeystore {
+//     pub fn new(db: sled::Db) -> Self {
+//         Self { db }
+//     }
+// }
 
-#[async_trait::async_trait]
-impl Keystore for SledKeystore {
-    /// Create a new card identified by `id`.
-    async fn create_new_card(
-        &self,
-        id: &str,
-        password: SecretString,
-        bip39_passphrase: Option<SecretString>,
-        metadata: HashMap<String, String>,
-    ) -> Result<(ChainCard, SecretString)> {
-        if self.db.contains_key(id.as_bytes())? {
-            return Err(anyhow!("Card with id '{}' already exists", id));
-        }
+// #[async_trait::async_trait]
+// impl Keystore for SledKeystore {
+//     /// Create a new card identified by `id`.
+//     async fn create_new_card(
+//         &self,
+//         id: &str,
+//         password: SecretString,
+//         bip39_passphrase: Option<SecretString>,
+//         metadata: HashMap<String, String>,
+//     ) -> Result<(ChainCard, SecretString)> {
+//         if self.db.contains_key(id.as_bytes())? {
+//             return Err(anyhow!("Card with id '{}' already exists", id));
+//         }
 
-        // Generate ChainCard + mnemonic.
-        let (card, mnemonic_phrase) =
-            ChainCardFactory::generate_new(bip39_passphrase.as_ref(), metadata.clone())?;
+//         // Generate ChainCard + mnemonic.
+//         let (card, mnemonic_phrase) =
+//             ChainCardFactory::generate_new(bip39_passphrase.as_ref(), metadata.clone())?;
 
-        // Argon2 salt and key derivation.
-        let salt = SaltString::generate(&mut RandCoreOsRng);
-        let key_zero = Crypto::derive_key(&password, &salt)?;
+//         // Argon2 salt and key derivation.
+//         let salt = SaltString::generate(&mut RandCoreOsRng);
+//         let key_zero = Crypto::derive_key(&password, &salt)?;
 
-        // Encrypt mnemonic using derived key.
-        let (encrypted_mnemonic_phrase, nonce_bytes) =
-            Crypto::encrypt(mnemonic_phrase.expose_secret().as_bytes(), &*key_zero)?;
+//         // Encrypt mnemonic using derived key.
+//         let (encrypted_mnemonic_phrase, nonce_bytes) =
+//             Crypto::encrypt(mnemonic_phrase.expose_secret().as_bytes(), &*key_zero)?;
 
-        // Persist data.
-        let storable_data = StorableCard {
-            encrypted_mnemonic_phrase,
-            salt: salt.to_string(),
-            nonce: nonce_bytes,
-            metadata,
-        };
+//         // Persist data.
+//         let storable_data = StorableCard {
+//             encrypted_mnemonic_phrase,
+//             salt: salt.to_string(),
+//             nonce: nonce_bytes,
+//             metadata,
+//         };
 
-        self.db
-            .insert(id.as_bytes(), serde_json::to_vec(&storable_data)?)?;
-        self.db.flush_async().await?;
+//         self.db
+//             .insert(id.as_bytes(), serde_json::to_vec(&storable_data)?)?;
+//         self.db.flush_async().await?;
 
-        Ok((card, mnemonic_phrase))
-    }
+//         Ok((card, mnemonic_phrase))
+//     }
 
-    /// Load a stored card and decrypt using the provided `password`.
-    async fn load_card(
-        &self,
-        id: &str,
-        password: SecretString,
-        bip39_passphrase: Option<SecretString>,
-    ) -> Result<ChainCard> {
-        let raw_data = self
-            .db
-            .get(id.as_bytes())?
-            .ok_or_else(|| anyhow!("Card with id '{}' not found", id))?;
-        let storable_data: StorableCard = serde_json::from_slice(&raw_data)
-            .map_err(|e| anyhow!("Stored data is invalid: {}", e))?;
+//     /// Load a stored card and decrypt using the provided `password`.
+//     async fn load_card(
+//         &self,
+//         id: &str,
+//         password: SecretString,
+//         bip39_passphrase: Option<SecretString>,
+//     ) -> Result<ChainCard> {
+//         let raw_data = self
+//             .db
+//             .get(id.as_bytes())?
+//             .ok_or_else(|| anyhow!("Card with id '{}' not found", id))?;
+//         let storable_data: StorableCard = serde_json::from_slice(&raw_data)
+//             .map_err(|e| anyhow!("Stored data is invalid: {}", e))?;
 
-        let salt = SaltString::from_b64(&storable_data.salt)
-            .map_err(|e| anyhow!("Invalid salt format: {}", e))?;
-        let key_zero = Crypto::derive_key(&password, &salt)?;
+//         let salt = SaltString::from_b64(&storable_data.salt)
+//             .map_err(|e| anyhow!("Invalid salt format: {}", e))?;
+//         let key_zero = Crypto::derive_key(&password, &salt)?;
 
-        // Decrypt mnemonic.
-        let decrypted_bytes = Crypto::decrypt(
-            &storable_data.encrypted_mnemonic_phrase,
-            &storable_data.nonce,
-            &*key_zero,
-        )?;
-        let mnemonic_phrase = String::from_utf8(decrypted_bytes)
-            .map_err(|e| anyhow!("Decrypted mnemonic is not UTF-8: {}", e))?;
+//         // Decrypt mnemonic.
+//         let decrypted_bytes = Crypto::decrypt(
+//             &storable_data.encrypted_mnemonic_phrase,
+//             &storable_data.nonce,
+//             &*key_zero,
+//         )?;
+//         let mnemonic_phrase = String::from_utf8(decrypted_bytes)
+//             .map_err(|e| anyhow!("Decrypted mnemonic is not UTF-8: {}", e))?;
 
-        // Restore ChainCard.
-        let card = ChainCardFactory::from_mnemonic(
-            &mnemonic_phrase,
-            bip39_passphrase.as_ref(),
-            storable_data.metadata,
-        )?;
+//         // Restore ChainCard.
+//         let card = ChainCardFactory::from_mnemonic(
+//             &mnemonic_phrase,
+//             bip39_passphrase.as_ref(),
+//             storable_data.metadata,
+//         )?;
 
-        Ok(card)
-    }
+//         Ok(card)
+//     }
 
-    async fn list_cards(&self) -> Result<HashMap<String, HashMap<String, String>>> {
-        let mut result = HashMap::new();
-        for item in self.db.iter() {
-            let (key_bytes, val_bytes) = item?;
-            let id = String::from_utf8(key_bytes.to_vec())?;
-            let storable_data: StorableCard = serde_json::from_slice(&val_bytes)?;
-            result.insert(id, storable_data.metadata);
-        }
-        Ok(result)
-    }
+//     async fn list_cards(&self) -> Result<HashMap<String, HashMap<String, String>>> {
+//         let mut result = HashMap::new();
+//         for item in self.db.iter() {
+//             let (key_bytes, val_bytes) = item?;
+//             let id = String::from_utf8(key_bytes.to_vec())?;
+//             let storable_data: StorableCard = serde_json::from_slice(&val_bytes)?;
+//             result.insert(id, storable_data.metadata);
+//         }
+//         Ok(result)
+//     }
 
-    async fn update_metadata(&self, id: &str, update: MetadataUpdate) -> Result<()> {
-        let raw_data = self
-            .db
-            .get(id.as_bytes())?
-            .ok_or_else(|| anyhow!("Card with id '{}' not found to update", id))?;
-        let mut storable_data: StorableCard = serde_json::from_slice(&raw_data)?;
+//     async fn update_metadata(&self, id: &str, update: MetadataUpdate) -> Result<()> {
+//         let raw_data = self
+//             .db
+//             .get(id.as_bytes())?
+//             .ok_or_else(|| anyhow!("Card with id '{}' not found to update", id))?;
+//         let mut storable_data: StorableCard = serde_json::from_slice(&raw_data)?;
 
-        match update {
-            MetadataUpdate::Replace(new_map) => {
-                storable_data.metadata = new_map;
-            }
-            MetadataUpdate::Set(key, value) => {
-                storable_data.metadata.insert(key, value);
-            }
-            MetadataUpdate::Delete(key) => {
-                storable_data.metadata.remove(&key);
-            }
-        }
+//         match update {
+//             MetadataUpdate::Replace(new_map) => {
+//                 storable_data.metadata = new_map;
+//             }
+//             MetadataUpdate::Set(key, value) => {
+//                 storable_data.metadata.insert(key, value);
+//             }
+//             MetadataUpdate::Delete(key) => {
+//                 storable_data.metadata.remove(&key);
+//             }
+//         }
 
-        self.db
-            .insert(id.as_bytes(), serde_json::to_vec(&storable_data)?)?;
-        self.db.flush_async().await?;
-        Ok(())
-    }
+//         self.db
+//             .insert(id.as_bytes(), serde_json::to_vec(&storable_data)?)?;
+//         self.db.flush_async().await?;
+//         Ok(())
+//     }
 
-    async fn delete_card(&self, id: &str) -> Result<()> {
-        let removed = self.db.remove(id.as_bytes())?;
-        if removed.is_none() {
-            return Err(anyhow!("Card with id '{}' not found", id));
-        }
-        self.db.flush_async().await?;
-        Ok(())
-    }
-}
+//     async fn delete_card(&self, id: &str) -> Result<()> {
+//         let removed = self.db.remove(id.as_bytes())?;
+//         if removed.is_none() {
+//             return Err(anyhow!("Card with id '{}' not found", id));
+//         }
+//         self.db.flush_async().await?;
+//         Ok(())
+//     }
+// }

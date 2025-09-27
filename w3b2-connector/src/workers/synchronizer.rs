@@ -8,32 +8,40 @@ use solana_client::nonblocking::rpc_client::RpcClient;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
-pub struct Synchronizer;
+pub struct Synchronizer {
+    catchup_worker: CatchupWorker,
+    live_worker: LiveWorker,
+}
 
 impl Synchronizer {
-    /// Creates and runs both the catch-up and live workers in the background.
-    pub fn start(
+    /// Creates a new `Synchronizer` instance, preparing the workers but not starting them.
+    pub fn new(
         config: Arc<ConnectorConfig>,
         rpc_client: Arc<RpcClient>,
         storage: Arc<dyn Storage>,
         event_tx: broadcast::Sender<BridgeEvent>,
-    ) {
+    ) -> Self {
         let context = WorkerContext::new(config, rpc_client, storage, event_tx);
-
-        // Run the catch-up worker
         let catchup_worker = CatchupWorker::new(context.clone());
-        tokio::spawn(async move {
-            if let Err(e) = catchup_worker.run().await {
-                tracing::error!("Catch-up worker failed: {}", e);
-            }
-        });
-
-        // Run the live worker
         let live_worker = LiveWorker::new(context);
-        tokio::spawn(async move {
-            if let Err(e) = live_worker.run().await {
-                tracing::error!("Live worker failed: {}", e);
-            }
-        });
+
+        Self {
+            catchup_worker,
+            live_worker,
+        }
+    }
+
+    /// Runs both the catch-up and live workers concurrently.
+    ///
+    /// This method will run indefinitely until one of the workers fails or the parent task is cancelled.
+    /// This should be called and awaited by the application's main runtime.
+    pub async fn run(self) -> anyhow::Result<()> {
+        tracing::info!("Starting synchronizer workers...");
+
+        // Run both workers concurrently. `tokio::try_join!` will return
+        // immediately if any of the workers returns an error.
+        tokio::try_join!(self.catchup_worker.run(), self.live_worker.run())?;
+
+        Ok(())
     }
 }
