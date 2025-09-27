@@ -1,20 +1,18 @@
-// w3b2-connector/src/keystore.rs
-//! Keystore implementation for w3b2-connector
-//!
-//! - Provides password-based encryption of BIP-39 mnemonic phrases using Argon2 + AES-256-GCM.
-//! - Persists encrypted records into a sled DB as JSON blobs (StorableCard).
-//! - Returns `ChainCard` (unlocked) when loading a card with the correct password.
-//!
-//! Security design summary:
-//! - Argon2 derives a 32-byte key from a user password and a per-card random salt (`SaltString`).
-//! - AES-256-GCM encrypts the mnemonic with a randomly generated 96-bit nonce per encryption.
-//! - Nonce + salt + ciphertext are stored in the DB. The mnemonic is not stored in plaintext.
-//! - Sensitive data (derived key) is wrapped in `zeroize::Zeroizing` so it is zeroed on drop.
-//!
-//! Notes:
-//! - Keep Argon2 parameters tuned for your threat model (work factor vs ux).
-//! - This module tries to minimize in-memory lifetime of secrets, but the OS may swap; consider secure environments.
-
+/// Keystore implementation for w3b2-connector
+///
+/// - Provides password-based encryption of BIP-39 mnemonic phrases using Argon2 + AES-256-GCM.
+/// - Persists encrypted records into a sled DB as JSON blobs (StorableCard).
+/// - Returns `ChainCard` (unlocked) when loading a card with the correct password.
+///
+/// Security design summary:
+/// - Argon2 derives a 32-byte key from a user password and a per-card random salt (`SaltString`).
+/// - AES-256-GCM encrypts the mnemonic with a randomly generated 96-bit nonce per encryption.
+/// - Nonce + salt + ciphertext are stored in the DB. The mnemonic is not stored in plaintext.
+/// - Sensitive data (derived key) is wrapped in `zeroize::Zeroizing` so it is zeroed on drop.
+///
+/// Notes:
+/// - Keep Argon2 parameters tuned for your threat model (work factor vs ux).
+/// - This module tries to minimize in-memory lifetime of secrets, but the OS may swap; consider secure environments.
 use aes_gcm::{
     aead::{generic_array::GenericArray, Aead, Key},
     AeadCore, Aes256Gcm, KeyInit,
@@ -117,6 +115,58 @@ impl ChainCard {
     }
 }
 
+/// Factory for creating and restoring `ChainCard`s.
+pub struct ChainCardFactory;
+
+impl ChainCardFactory {
+    /// Generate a new ChainCard and return it along with the mnemonic phrase.
+    pub fn generate_new(
+        bip39_passphrase: Option<&SecretString>,
+        metadata: HashMap<String, String>,
+    ) -> Result<(ChainCard, SecretString)> {
+        // 1. Generate mnemonic (12 words).
+        let mnemonic = Mnemonic::generate(12)?;
+        let mnemonic_phrase = SecretString::new(mnemonic.to_string().into_boxed_str());
+
+        // 2. Derive seed from mnemonic + optional passphrase.
+        let bip39_pass = bip39_passphrase.map_or("", |p| p.expose_secret());
+        let seed = mnemonic.to_seed(bip39_pass);
+
+        // 3. Build Keypair using Solana helper.
+        let keypair = keypair_from_seed(seed.as_ref())
+            .map_err(|e| anyhow!("Failed to derive keypair: {}", e))?;
+
+        // 4. Construct ChainCard.
+        let card = ChainCard {
+            pubkey: keypair.pubkey(),
+            keypair,
+            metadata,
+        };
+
+        Ok((card, mnemonic_phrase))
+    }
+
+    /// Restore ChainCard from an existing mnemonic.
+    pub fn from_mnemonic(
+        mnemonic_phrase: &str,
+        bip39_passphrase: Option<&SecretString>,
+        metadata: HashMap<String, String>,
+    ) -> Result<ChainCard> {
+        let mnemonic = Mnemonic::from_str(mnemonic_phrase)?;
+        let bip39_pass = bip39_passphrase.map_or("", |p| p.expose_secret());
+        let seed = mnemonic.to_seed(bip39_pass);
+
+        let keypair = keypair_from_seed(seed.as_ref())
+            .map_err(|e| anyhow!("Failed to derive keypair: {}", e))?;
+
+        Ok(ChainCard {
+            pubkey: keypair.pubkey(),
+            keypair,
+            metadata,
+        })
+    }
+}
+
 /// Stored representation persisted to sled.
 #[derive(Debug, Serialize, Deserialize)]
 struct StorableCard {
@@ -183,44 +233,30 @@ impl Keystore for SledKeystore {
             return Err(anyhow!("Card with id '{}' already exists", id));
         }
 
-        // Generate mnemonic and derive seed.
-        let mnemonic = Mnemonic::generate(12)?;
-        let mnemonic_phrase = SecretString::new(mnemonic.to_string().into_boxed_str());
-
-        // Derive seed for keypair. bip39::Mnemonic::to_seed accepts &str passphrase; empty string if None.
-        let bip39_pass = bip39_passphrase.as_ref().map_or("", |p| p.expose_secret());
-        let seed = mnemonic.to_seed(bip39_pass);
-
-        // IMPORTANT: use solana helper to construct Keypair from seed.
-        // This follows solana-keygen behaviour: it uses the first 32 bytes of the seed.
-        let keypair = keypair_from_seed(seed.as_ref())
-            .map_err(|e| anyhow!("Failed to derive keypair from seed: {}", e))?;
+        // Generate ChainCard + mnemonic.
+        let (card, mnemonic_phrase) =
+            ChainCardFactory::generate_new(bip39_passphrase.as_ref(), metadata.clone())?;
 
         // Argon2 salt and key derivation.
         let salt = SaltString::generate(&mut RandCoreOsRng);
         let key_zero = Crypto::derive_key(&password, &salt)?;
 
-        // Encrypt mnemonic using derived key. nonce and ciphertext are returned.
+        // Encrypt mnemonic using derived key.
         let (encrypted_mnemonic_phrase, nonce_bytes) =
-            Crypto::encrypt(mnemonic_phrase.expose_secret().as_bytes(), &*key_zero)
-                .map_err(|e| anyhow!("Encryption stage failed: {}", e))?;
+            Crypto::encrypt(mnemonic_phrase.expose_secret().as_bytes(), &*key_zero)?;
 
+        // Persist data.
         let storable_data = StorableCard {
             encrypted_mnemonic_phrase,
             salt: salt.to_string(),
             nonce: nonce_bytes,
-            metadata: metadata.clone(),
+            metadata,
         };
 
         self.db
             .insert(id.as_bytes(), serde_json::to_vec(&storable_data)?)?;
         self.db.flush_async().await?;
 
-        let card = ChainCard {
-            pubkey: keypair.pubkey(),
-            keypair,
-            metadata,
-        };
         Ok((card, mnemonic_phrase))
     }
 
@@ -242,27 +278,21 @@ impl Keystore for SledKeystore {
             .map_err(|e| anyhow!("Invalid salt format: {}", e))?;
         let key_zero = Crypto::derive_key(&password, &salt)?;
 
+        // Decrypt mnemonic.
         let decrypted_bytes = Crypto::decrypt(
             &storable_data.encrypted_mnemonic_phrase,
             &storable_data.nonce,
             &*key_zero,
         )?;
-
         let mnemonic_phrase = String::from_utf8(decrypted_bytes)
             .map_err(|e| anyhow!("Decrypted mnemonic is not UTF-8: {}", e))?;
-        let mnemonic = Mnemonic::from_str(&mnemonic_phrase)?;
 
-        let bip39_pass = bip39_passphrase.as_ref().map_or("", |p| p.expose_secret());
-        let seed = mnemonic.to_seed(bip39_pass);
-
-        let keypair = keypair_from_seed(seed.as_ref())
-            .map_err(|e| anyhow!("Failed to derive keypair from seed: {}", e))?;
-
-        let card = ChainCard {
-            pubkey: keypair.pubkey(),
-            keypair,
-            metadata: storable_data.metadata,
-        };
+        // Restore ChainCard.
+        let card = ChainCardFactory::from_mnemonic(
+            &mnemonic_phrase,
+            bip39_passphrase.as_ref(),
+            storable_data.metadata,
+        )?;
 
         Ok(card)
     }
