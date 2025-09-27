@@ -26,10 +26,7 @@ use bip39::Mnemonic;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use solana_sdk::{
-    pubkey::Pubkey,
-    signature::Keypair,
-    signature::Signer,
-    signer::keypair::keypair_from_seed, // <- using solana's helper (solana_keypair)
+    pubkey::Pubkey, signature::Keypair, signature::Signer, signer::keypair::keypair_from_seed,
 };
 use std::collections::HashMap;
 use std::str::FromStr;

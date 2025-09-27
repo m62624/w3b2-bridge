@@ -1,6 +1,5 @@
 // w3b2-connector/src/live.rs
 
-use crate::worker::WorkerContext;
 use anyhow::Result;
 use solana_client::{
     nonblocking::pubsub_client::PubsubClient,
@@ -9,6 +8,8 @@ use solana_client::{
 };
 use solana_sdk::commitment_config::CommitmentConfig;
 use tokio_stream::StreamExt;
+
+use crate::workers::WorkerContext;
 
 pub struct LiveWorker {
     ctx: WorkerContext,

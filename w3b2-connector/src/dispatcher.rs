@@ -9,48 +9,55 @@ use tokio::sync::{broadcast, mpsc};
 /// and routing them to the appropriate ChainCard worker based on the public keys
 /// involved in the event.
 pub struct Dispatcher {
-    /// Receives all events from the Synchronizer's broadcast channel.
+    // This receives all events from the Synchronizer.
     event_rx: broadcast::Receiver<BridgeEvent>,
-    /// Maps a ChainCard's public key to the sender half of its dedicated channel.
-    worker_channels: HashMap<Pubkey, mpsc::Sender<BridgeEvent>>,
+    // This now stores the channels for dynamically added listeners.
+    listeners: HashMap<Pubkey, mpsc::Sender<BridgeEvent>>,
+    // ADDED: A channel to receive requests to add new listeners.
+    registration_rx: mpsc::Receiver<(Pubkey, mpsc::Sender<BridgeEvent>)>,
 }
 
 impl Dispatcher {
     pub fn new(
         event_rx: broadcast::Receiver<BridgeEvent>,
-        worker_channels: HashMap<Pubkey, mpsc::Sender<BridgeEvent>>,
+        // We can start with an empty map because listeners will be added dynamically.
+        initial_listeners: HashMap<Pubkey, mpsc::Sender<BridgeEvent>>,
+        registration_rx: mpsc::Receiver<(Pubkey, mpsc::Sender<BridgeEvent>)>,
     ) -> Self {
         Self {
             event_rx,
-            worker_channels,
+            listeners: initial_listeners,
+            registration_rx,
         }
     }
 
     /// Starts the main event-loop for the dispatcher.
     pub async fn run(&mut self) {
-        tracing::info!("Dispatcher started. Waiting for events...");
+        tracing::info!("Dispatcher started. Waiting for events and new subscriptions...");
         loop {
-            match self.event_rx.recv().await {
-                Ok(event) => {
+            tokio::select! {
+                // Case 1: An event arrived from the blockchain.
+                // This logic is the same as in your original code.
+                Ok(event) = self.event_rx.recv() => {
                     let relevant_pubkeys = extract_pubkeys_from_event(&event);
                     for pubkey in relevant_pubkeys {
-                        if let Some(worker_tx) = self.worker_channels.get(&pubkey) {
-                            if worker_tx.send(event.clone()).await.is_err() {
-                                tracing::warn!("Worker channel for pubkey {} is closed.", pubkey);
+                        if let Some(listener_tx) = self.listeners.get(&pubkey) {
+                            if listener_tx.send(event.clone()).await.is_err() {
+                                tracing::warn!("Listener for pubkey {} has disconnected.", pubkey);
                             }
                         }
                     }
-                }
-                // Case 1: The receiver is lagging and skipped some messages.
-                Err(broadcast::error::RecvError::Lagged(skipped_count)) => {
-                    tracing::warn!("Dispatcher lagged, skipped {} messages.", skipped_count);
-                    // We continue the loop, as the channel is still open.
-                    continue;
-                }
-                // Case 2: The sender has been dropped, so no more messages will arrive.
-                Err(broadcast::error::RecvError::Closed) => {
-                    tracing::error!("Broadcast channel closed. Dispatcher shutting down.");
-                    // We break the loop to stop the task.
+                },
+
+                // Case 2 (NEW): A request to add a new listener arrived from EventManager.
+                Some((pubkey, tx)) = self.registration_rx.recv() => {
+                    tracing::info!("Dispatcher: Registering new listener for {}", pubkey);
+                    self.listeners.insert(pubkey, tx);
+                },
+
+                // All channels have closed, so we shut down.
+                else => {
+                    tracing::error!("All channels closed. Dispatcher shutting down.");
                     break;
                 }
             }

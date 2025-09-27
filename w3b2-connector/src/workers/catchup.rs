@@ -1,7 +1,9 @@
 // w3b2-connector/src/catchup.rs
 
-use crate::events::{try_parse_log, BridgeEvent};
-use crate::worker::WorkerContext;
+use crate::{
+    events::{try_parse_log, BridgeEvent},
+    workers::WorkerContext,
+};
 use anyhow::Result;
 use solana_client::{
     nonblocking::rpc_client::RpcClient, rpc_client::GetConfirmedSignaturesForAddress2Config,

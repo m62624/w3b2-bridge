@@ -1,8 +1,10 @@
 // w3b2-connector/src/synchronizer.rs
 
 use crate::{
-    catchup::CatchupWorker, config::Config, events::BridgeEvent, live::LiveWorker,
-    storage::Storage, worker::WorkerContext,
+    config::Config,
+    events::BridgeEvent,
+    storage::Storage,
+    workers::{catchup::CatchupWorker, live::LiveWorker, WorkerContext},
 };
 use std::sync::Arc;
 use tokio::sync::broadcast;
