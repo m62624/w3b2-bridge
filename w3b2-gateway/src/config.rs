@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
-// Import the core configuration from our library
 use w3b2_connector::config::ConnectorConfig;
 
 /// The top-level configuration for the W3B2 Gateway application.

@@ -30,47 +30,62 @@ pub struct Dispatcher {
     event_rx: broadcast::Receiver<BridgeEvent>,
     // This stores the dedicated channels for listeners who have subscribed.
     listeners: HashMap<Pubkey, mpsc::Sender<BridgeEvent>>,
-    // This receives requests from the EventManager to add new listeners.
-    registration_rx: mpsc::Receiver<(Pubkey, mpsc::Sender<BridgeEvent>)>,
+    // This channel now receives commands, not just registrations.
+    command_rx: mpsc::Receiver<DispatcherCommand>,
+}
+
+/// Defines commands that can be sent to the Dispatcher task.
+#[derive(Debug)]
+pub enum DispatcherCommand {
+    /// Registers a new listener for a given public key.
+    Register(Pubkey, mpsc::Sender<BridgeEvent>),
+    /// Unregisters a listener for a given public key.
+    Unregister(Pubkey),
 }
 
 impl Dispatcher {
     pub fn new(
         event_rx: broadcast::Receiver<BridgeEvent>,
-        initial_listeners: HashMap<Pubkey, mpsc::Sender<BridgeEvent>>,
-        registration_rx: mpsc::Receiver<(Pubkey, mpsc::Sender<BridgeEvent>)>,
+        command_rx: mpsc::Receiver<DispatcherCommand>,
     ) -> Self {
         Self {
             event_rx,
-            listeners: initial_listeners,
-            registration_rx,
+            listeners: HashMap::new(),
+            command_rx,
         }
     }
 
     /// Starts the main event-loop for the dispatcher.
     pub async fn run(&mut self) {
-        tracing::info!("Dispatcher started. Waiting for events and new subscriptions...");
+        tracing::info!("Dispatcher started. Waiting for events and commands...");
         loop {
             tokio::select! {
-                // Case 1: An event arrived from the blockchain.
+                // An event arrived from the blockchain.
                 Ok(event) = self.event_rx.recv() => {
                     let relevant_pubkeys = extract_pubkeys_from_event(&event);
                     for pubkey in relevant_pubkeys {
                         if let Some(listener_tx) = self.listeners.get(&pubkey) {
                             if listener_tx.send(event.clone()).await.is_err() {
-                                tracing::warn!("Listener for pubkey {} has disconnected.", pubkey);
+                                // The receiver was dropped. The active `unsubscribe` call will clean this up,
+                                // but logging it is still useful.
+                                tracing::warn!("Attempted to send to a disconnected listener for pubkey {}.", pubkey);
                             }
                         }
                     }
                 },
-
-                // Case 2: A request to add a new listener arrived from the EventManager.
-                Some((pubkey, tx)) = self.registration_rx.recv() => {
-                    tracing::info!("Dispatcher: Registering new listener for {}", pubkey);
-                    self.listeners.insert(pubkey, tx);
+                // A command to register or unregister a listener arrived.
+                Some(command) = self.command_rx.recv() => {
+                    match command {
+                        DispatcherCommand::Register(pubkey, tx) => {
+                            tracing::info!("Dispatcher: Registering new listener for {}", pubkey);
+                            self.listeners.insert(pubkey, tx);
+                        },
+                        DispatcherCommand::Unregister(pubkey) => {
+                            tracing::info!("Dispatcher: Unregistering listener for {}", pubkey);
+                            self.listeners.remove(&pubkey);
+                        }
+                    }
                 },
-
-                // All channels have closed, so we shut down.
                 else => {
                     tracing::error!("All channels closed. Dispatcher shutting down.");
                     break;

@@ -4,7 +4,7 @@ mod synchronizer;
 
 use crate::{
     config::ConnectorConfig,
-    dispatcher::Dispatcher,
+    dispatcher::{Dispatcher, DispatcherCommand},
     events::BridgeEvent,
     listener::{AdminListener, UserListener},
     storage::Storage,
@@ -12,7 +12,7 @@ use crate::{
 };
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 
 /// A shared context containing all dependencies required by the workers.
@@ -46,7 +46,7 @@ impl WorkerContext {
 pub struct EventManager {
     synchronizer: Synchronizer,
     dispatcher: Dispatcher,
-    pub registration_tx: mpsc::Sender<(Pubkey, mpsc::Sender<BridgeEvent>)>,
+    command_tx: mpsc::Sender<DispatcherCommand>,
 }
 
 impl EventManager {
@@ -54,12 +54,11 @@ impl EventManager {
         config: Arc<ConnectorConfig>,
         rpc_client: Arc<RpcClient>,
         storage: Arc<dyn Storage>,
-        // Capacities are now arguments for better control by the binary.
         broadcast_capacity: usize,
         registration_capacity: usize,
     ) -> Self {
         let (event_tx, event_rx) = broadcast::channel(broadcast_capacity);
-        let (reg_tx, reg_rx) = mpsc::channel(registration_capacity);
+        let (cmd_tx, cmd_rx) = mpsc::channel(registration_capacity);
 
         let synchronizer = Synchronizer::new(
             config.clone(),
@@ -68,12 +67,12 @@ impl EventManager {
             event_tx,
         );
 
-        let dispatcher = Dispatcher::new(event_rx, HashMap::new(), reg_rx);
+        let dispatcher = Dispatcher::new(event_rx, cmd_rx);
 
         Self {
             synchronizer,
             dispatcher,
-            registration_tx: reg_tx,
+            command_tx: cmd_tx,
         }
     }
 
@@ -100,11 +99,28 @@ impl EventManager {
         channel_capacity: usize,
     ) -> mpsc::Receiver<BridgeEvent> {
         let (tx, rx) = mpsc::channel(channel_capacity);
-        self.registration_tx
-            .send((pubkey, tx))
+        self.command_tx
+            .send(DispatcherCommand::Register(pubkey, tx))
             .await
             .expect("Dispatcher should always be running");
         rx
+    }
+
+    /// Unregisters a listener for a specific pubkey from the dispatcher.
+    ///
+    /// This should be called when a listener is no longer needed to prevent resource leaks.
+    pub async fn unsubscribe(&self, pubkey: Pubkey) {
+        if self
+            .command_tx
+            .send(DispatcherCommand::Unregister(pubkey))
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                "Failed to send unsubscribe command for {}. Dispatcher may be down.",
+                pubkey
+            );
+        }
     }
 
     /// Creates and returns a contextual listener for a User `ChainCard`.

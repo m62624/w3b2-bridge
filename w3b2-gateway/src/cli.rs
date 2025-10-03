@@ -1,6 +1,3 @@
-// w3b2-gateway/src/cli.rs
-// Comments are in English, as requested.
-
 use clap::{Parser, Subcommand};
 
 /// The main CLI structure for the W3B2 Gateway.

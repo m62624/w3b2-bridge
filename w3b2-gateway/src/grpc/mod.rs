@@ -1,4 +1,3 @@
-// File: w3b2-gateway/src/grpc.rs
 mod conversions;
 use anyhow::Result;
 use solana_client::nonblocking::rpc_client::RpcClient;
@@ -84,6 +83,8 @@ impl BridgeGatewayService for GatewayServer {
 
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
 
+        let event_manager = self.state.event_manager.clone();
+
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -102,6 +103,9 @@ impl BridgeGatewayService for GatewayServer {
                     else => { break; }
                 }
             }
+
+            tracing::info!("Client for {} disconnected. Unsubscribing.", pubkey);
+            event_manager.unsubscribe(pubkey).await;
         });
 
         let stream = ReceiverStream::new(rx);
@@ -124,6 +128,8 @@ impl BridgeGatewayService for GatewayServer {
         let (mut personal_rx, mut commands_rx, mut new_users_rx) = admin_listener.into_parts();
 
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
+
+        let event_manager = self.state.event_manager.clone();
 
         tokio::spawn(async move {
             loop {
@@ -159,6 +165,9 @@ impl BridgeGatewayService for GatewayServer {
                     else => { break; }
                 }
             }
+
+            tracing::info!("Admin client for {} disconnected. Unsubscribing.", pubkey);
+            event_manager.unsubscribe(pubkey).await;
         });
 
         let stream = ReceiverStream::new(rx);
