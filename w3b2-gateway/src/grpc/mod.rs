@@ -1,26 +1,34 @@
 // File: w3b2-gateway/src/grpc.rs
-
+mod conversions;
 use anyhow::Result;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
 use std::str::FromStr;
 use std::sync::Arc;
-use tonic::{Request, Response, Status, transport::Server};
-use w3b2_connector::{Accounts::PriceEntry, client::TransactionBuilder};
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::{Request, Response, Status};
+use w3b2_connector::{
+    Accounts::PriceEntry,
+    client::TransactionBuilder,
+    listener::{AdminListener, UserListener},
+    workers::EventManager,
+};
 
 use base64::{Engine as _, engine::general_purpose};
 
 use crate::{
     config,
     grpc::proto::w3b2::bridge::gateway::{
-        PrepareAdminCloseProfileRequest, PrepareAdminDispatchCommandRequest,
-        PrepareAdminRegisterProfileRequest, PrepareAdminUpdateCommKeyRequest,
-        PrepareAdminUpdatePricesRequest, PrepareAdminWithdrawRequest, PrepareLogActionRequest,
-        PrepareUserCloseProfileRequest, PrepareUserCreateProfileRequest, PrepareUserDepositRequest,
+        AdminEventStream, BridgeEvent, ListenRequest, PrepareAdminCloseProfileRequest,
+        PrepareAdminDispatchCommandRequest, PrepareAdminRegisterProfileRequest,
+        PrepareAdminUpdateCommKeyRequest, PrepareAdminUpdatePricesRequest,
+        PrepareAdminWithdrawRequest, PrepareLogActionRequest, PrepareUserCloseProfileRequest,
+        PrepareUserCreateProfileRequest, PrepareUserDepositRequest,
         PrepareUserDispatchCommandRequest, PrepareUserUpdateCommKeyRequest,
         PrepareUserWithdrawRequest, SubmitTransactionRequest, TransactionResponse,
-        UnsignedTransactionResponse,
+        UnsignedTransactionResponse, UserEventStream, admin_event_stream, bridge_event,
         bridge_gateway_service_server::{BridgeGatewayService, BridgeGatewayServiceServer},
+        user_event_stream,
     },
 };
 
@@ -39,10 +47,9 @@ pub mod proto {
 #[derive(Clone)]
 pub struct AppState {
     pub rpc_client: Arc<RpcClient>,
+    pub event_manager: Arc<EventManager>,
 }
 
-/// The implementation of our gRPC Gateway service.
-/// This struct acts as a thin wrapper around the w3b2_connector::TransactionBuilder.
 pub struct GatewayServer {
     state: AppState,
 }
@@ -56,6 +63,108 @@ impl GatewayServer {
 
 #[tonic::async_trait]
 impl BridgeGatewayService for GatewayServer {
+    // ===================================================================
+    // == Event Streaming Implementations
+    // ===================================================================
+
+    type ListenAsUserStream = ReceiverStream<Result<UserEventStream, Status>>;
+
+    async fn listen_as_user(
+        &self,
+        request: Request<ListenRequest>,
+    ) -> Result<Response<Self::ListenAsUserStream>, Status> {
+        let req = request.into_inner();
+        let pubkey = Pubkey::from_str(&req.pubkey_to_follow)
+            .map_err(|_| Status::invalid_argument("Invalid pubkey_to_follow format"))?;
+
+        let user_listener: UserListener =
+            self.state.event_manager.listen_as_user(pubkey, 1024).await;
+
+        let (mut personal_rx, mut interactions_rx) = user_listener.into_parts();
+
+        let (tx, rx) = tokio::sync::mpsc::channel(1024);
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    Some(event) = personal_rx.recv() => {
+                        let stream_msg = UserEventStream {
+                            event_category: Some(user_event_stream::EventCategory::PersonalEvent(event.into())),
+                        };
+                        if tx.send(Ok(stream_msg)).await.is_err() { break; }
+                    },
+                    Some(event) = interactions_rx.recv() => {
+                        let stream_msg = UserEventStream {
+                            event_category: Some(user_event_stream::EventCategory::ServiceInteractionEvent(event.into())),
+                        };
+                        if tx.send(Ok(stream_msg)).await.is_err() { break; }
+                    },
+                    else => { break; }
+                }
+            }
+        });
+
+        let stream = ReceiverStream::new(rx);
+        Ok(Response::new(stream))
+    }
+
+    type ListenAsAdminStream = ReceiverStream<Result<AdminEventStream, Status>>;
+
+    async fn listen_as_admin(
+        &self,
+        request: Request<ListenRequest>,
+    ) -> Result<Response<Self::ListenAsAdminStream>, Status> {
+        let req = request.into_inner();
+        let pubkey = Pubkey::from_str(&req.pubkey_to_follow)
+            .map_err(|_| Status::invalid_argument("Invalid pubkey_to_follow format"))?;
+
+        let admin_listener: AdminListener =
+            self.state.event_manager.listen_as_admin(pubkey, 1024).await;
+
+        let (mut personal_rx, mut commands_rx, mut new_users_rx) = admin_listener.into_parts();
+
+        let (tx, rx) = tokio::sync::mpsc::channel(1024);
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    Some(event) = personal_rx.recv() => {
+                        // This part is simple: convert the whole enum.
+                        let stream_msg = AdminEventStream {
+                             event_category: Some(admin_event_stream::EventCategory::PersonalEvent(event.into())),
+                        };
+                        if tx.send(Ok(stream_msg)).await.is_err() { break; }
+                    },
+                    Some(event) = commands_rx.recv() => {
+
+                        let proto_event: BridgeEvent = event.into();
+
+                        if let Some(bridge_event::Event::UserCommandDispatched(proto_specific_event)) = proto_event.event {
+                            let stream_msg = AdminEventStream {
+                                event_category: Some(admin_event_stream::EventCategory::IncomingUserCommand(proto_specific_event)),
+                            };
+                            if tx.send(Ok(stream_msg)).await.is_err() { break; }
+                        }
+                    },
+                    Some(event) = new_users_rx.recv() => {
+
+                        let proto_event: BridgeEvent = event.into();
+                        if let Some(bridge_event::Event::UserProfileCreated(proto_specific_event)) = proto_event.event {
+                           let stream_msg = AdminEventStream {
+                               event_category: Some(admin_event_stream::EventCategory::NewUserProfile(proto_specific_event)),
+                           };
+                           if tx.send(Ok(stream_msg)).await.is_err() { break; }
+                        }
+                    },
+                    else => { break; }
+                }
+            }
+        });
+
+        let stream = ReceiverStream::new(rx);
+        Ok(Response::new(stream))
+    }
+
     // --- Admin Method Preparations ---
 
     async fn prepare_admin_register_profile(
@@ -452,26 +561,51 @@ impl BridgeGatewayService for GatewayServer {
     }
 }
 
-/// The main entry point to start the gRPC server.
-pub async fn start(config: &config::GatewayConfig) -> Result<()> {
-    let addr = format!("{}:{}", config.gateway.grpc.host, config.gateway.grpc.port).parse()?;
+// /// The main entry point to start the gRPC server.
+// pub async fn start(config: &config::GatewayConfig) -> Result<()> {
+//     let addr = format!("{}:{}", config.gateway.grpc.host, config.gateway.grpc.port).parse()?;
 
-    // Create a single, shared RpcClient instance.
-    let rpc_client = Arc::new(RpcClient::new(config.connector.solana.rpc_url.clone()));
+//     // Create a single, shared RpcClient instance.
+//     let rpc_client = Arc::new(RpcClient::new(config.connector.solana.rpc_url.clone()));
 
-    // The AppState is now very simple.
-    let app_state = AppState { rpc_client };
+//     // --- NEW: Initialize EventManager and its background tasks ---
+//     // Note: The storage dependency needs to be created here.
+//     // For now, let's assume a simple in-memory or sled-based storage.
+//     // let storage = Arc::new(SledStorage::new(...)); // You need to initialize this
+//     let event_manager = Arc::new(EventManager::new(
+//         Arc::new(config.connector.clone()),
+//         rpc_client.clone(),
+//         storage, // Pass the storage implementation
+//         1024,
+//         128,
+//     ));
 
-    // Instantiate the server.
-    let gateway_server = GatewayServer::new(app_state);
+//     // Spawn the EventManager's background services (Synchronizer and Dispatcher)
+//     let em_clone = event_manager.clone();
+//     tokio::spawn(async move {
+//         em_clone.run().await;
+//     });
+//     // --- END NEW ---
 
-    tracing::info!("Non-Custodial gRPC Gateway listening on {}", addr);
+//     // The AppState now holds the EventManager instance.
+//     let app_state = AppState {
+//         rpc_client,
+//         event_manager,
+//     };
 
-    // Build and run the Tonic server with our single service.
-    Server::builder()
-        .add_service(BridgeGatewayServiceServer::new(gateway_server))
-        .serve(addr)
-        .await?;
+//     // Instantiate the server.
+//     let gateway_server = GatewayServer::new(app_state);
 
-    Ok(())
-}
+//     tracing::info!(
+//         "Non-Custodial gRPC Gateway with Event Streaming listening on {}",
+//         addr
+//     );
+
+//     // Build and run the Tonic server with our single service.
+//     Server::builder()
+//         .add_service(BridgeGatewayServiceServer::new(gateway_server))
+//         .serve(addr)
+//         .await?;
+
+//     Ok(())
+// }

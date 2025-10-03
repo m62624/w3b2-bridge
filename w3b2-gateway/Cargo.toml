@@ -20,7 +20,7 @@ solana-client.workspace = true
 solana-sdk.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
-tonic = "0.14.2"
+tonic = "0.11"
 tracing = "0.1.41"
 w3b2-connector = { workspace = true, features = ["serde"] }
 

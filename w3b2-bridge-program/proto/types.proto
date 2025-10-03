@@ -1,6 +1,9 @@
 // File: proto/types.proto
 syntax = "proto3";
 
+// ===================================================================
+// == Package for Gateway-specific API messages
+// ===================================================================
 package w3b2.bridge.gateway;
 
 // Represents a single price entry, used in requests that update prices.
@@ -11,112 +14,193 @@ message PriceEntry {
   uint64 price = 2;
 }
 
-// ===================================================================
-// == Core RPC Message Types
-// ===================================================================
+// --- Core RPC Message Types for Transactions ---
 
-// A response containing a transaction that needs to be signed by the client.
-message UnsignedTransactionResponse {
-  // The transaction, serialized using bincode and then encoded in Base64.
-  // The client must decode this, sign it with their private key,
-  // re-serialize it, and send it back via the SubmitTransaction RPC.
-  string unsigned_tx_base64 = 1;
-}
+message UnsignedTransactionResponse { string unsigned_tx_base64 = 1; }
 
-// A generic request to submit a pre-signed transaction to the network.
-message SubmitTransactionRequest {
-  // The transaction, already signed by the client, serialized using bincode
-  // and then encoded in Base64.
-  string signed_tx_base64 = 1;
-}
+message SubmitTransactionRequest { string signed_tx_base64 = 1; }
 
-// Standard response for an RPC that successfully submits a transaction.
-message TransactionResponse {
-  // The Base58-encoded transaction signature (hash).
-  string signature = 1;
-}
+message TransactionResponse { string signature = 1; }
 
-// ===================================================================
-// == "Prepare" Transaction Request Messages
-// ===================================================================
-// Each 'Prepare' request includes the public key of the user who will
-// ultimately sign and pay for the transaction.
-
-// --- Admin Requests ---
+// --- "Prepare" Transaction Request Messages ---
 
 message PrepareAdminRegisterProfileRequest {
   string authority_pubkey = 1;
   string communication_pubkey = 2;
 }
-
 message PrepareAdminUpdateCommKeyRequest {
   string authority_pubkey = 1;
   string new_key = 2;
 }
-
 message PrepareAdminUpdatePricesRequest {
   string authority_pubkey = 1;
   repeated PriceEntry new_prices = 2;
 }
-
 message PrepareAdminWithdrawRequest {
   string authority_pubkey = 1;
   uint64 amount = 2;
   string destination = 3;
 }
-
 message PrepareAdminCloseProfileRequest { string authority_pubkey = 1; }
-
 message PrepareAdminDispatchCommandRequest {
   string authority_pubkey = 1;
   string target_user_profile_pda = 2;
   uint64 command_id = 3;
   bytes payload = 4;
 }
-
-// --- User Requests ---
-
 message PrepareUserCreateProfileRequest {
   string authority_pubkey = 1;
   string target_admin_pda = 2;
   string communication_pubkey = 3;
 }
-
 message PrepareUserUpdateCommKeyRequest {
   string authority_pubkey = 1;
   string admin_profile_pda = 2;
   string new_key = 3;
 }
-
 message PrepareUserDepositRequest {
   string authority_pubkey = 1;
   string admin_profile_pda = 2;
   uint64 amount = 3;
 }
-
 message PrepareUserWithdrawRequest {
   string authority_pubkey = 1;
   string admin_profile_pda = 2;
   uint64 amount = 3;
   string destination = 4;
 }
-
 message PrepareUserCloseProfileRequest {
   string authority_pubkey = 1;
   string admin_profile_pda = 2;
 }
-
 message PrepareUserDispatchCommandRequest {
   string authority_pubkey = 1;
   string admin_profile_pda = 2;
   uint32 command_id = 3;
   bytes payload = 4;
 }
-
-// --- Operational Requests ---
-
 message PrepareLogActionRequest {
   string authority_pubkey = 1;
   uint64 session_id = 2;
   uint32 action_code = 3;
+}
+
+// --- Messages for Event Streaming ---
+
+message ListenRequest { string pubkey_to_follow = 1; }
+
+message UserEventStream {
+  oneof event_category {
+    BridgeEvent personal_event = 1;
+    BridgeEvent service_interaction_event = 2;
+  }
+}
+
+message AdminEventStream {
+  oneof event_category {
+    BridgeEvent personal_event = 1;
+    UserCommandDispatched incoming_user_command = 2;
+    UserProfileCreated new_user_profile = 3;
+  }
+}
+
+message AdminProfileRegistered {
+  string authority = 1;
+  string communication_pubkey = 2;
+  int64 ts = 3;
+}
+message AdminCommKeyUpdated {
+  string authority = 1;
+  string new_comm_pubkey = 2;
+  int64 ts = 3;
+}
+message AdminPricesUpdated {
+  string authority = 1;
+  repeated w3b2.bridge.gateway.PriceEntry new_prices = 2;
+  int64 ts = 3;
+}
+message AdminFundsWithdrawn {
+  string authority = 1;
+  uint64 amount = 2;
+  string destination = 3;
+  int64 ts = 4;
+}
+message AdminProfileClosed {
+  string authority = 1;
+  int64 ts = 2;
+}
+message AdminCommandDispatched {
+  string sender = 1;
+  string target_user_authority = 2;
+  uint32 command_id = 3;
+  bytes payload = 4;
+  int64 ts = 5;
+}
+
+// --- User Events ---
+
+message UserProfileCreated {
+  string authority = 1;
+  string target_admin = 2;
+  string communication_pubkey = 3;
+  int64 ts = 4;
+}
+message UserCommKeyUpdated {
+  string authority = 1;
+  string new_comm_pubkey = 2;
+  int64 ts = 3;
+}
+message UserFundsDeposited {
+  string authority = 1;
+  uint64 amount = 2;
+  uint64 new_deposit_balance = 3;
+  int64 ts = 4;
+}
+message UserFundsWithdrawn {
+  string authority = 1;
+  uint64 amount = 2;
+  string destination = 3;
+  uint64 new_deposit_balance = 4;
+  int64 ts = 5;
+}
+message UserProfileClosed {
+  string authority = 1;
+  int64 ts = 2;
+}
+
+// --- Operational Events ---
+
+message UserCommandDispatched {
+  string sender = 1;
+  string target_admin_authority = 2;
+  uint32 command_id = 3;
+  uint64 price_paid = 4;
+  bytes payload = 5;
+  int64 ts = 6;
+}
+message OffChainActionLogged {
+  string actor = 1;
+  uint64 session_id = 2;
+  uint32 action_code = 3;
+  int64 ts = 4;
+}
+
+// --- Wrapper Event ---
+
+message BridgeEvent {
+  oneof event {
+    AdminProfileRegistered admin_profile_registered = 1;
+    AdminCommKeyUpdated admin_comm_key_updated = 2;
+    AdminPricesUpdated admin_prices_updated = 3;
+    AdminFundsWithdrawn admin_funds_withdrawn = 4;
+    AdminProfileClosed admin_profile_closed = 5;
+    AdminCommandDispatched admin_command_dispatched = 6;
+    UserProfileCreated user_profile_created = 7;
+    UserCommKeyUpdated user_comm_key_updated = 8;
+    UserFundsDeposited user_funds_deposited = 9;
+    UserFundsWithdrawn user_funds_withdrawn = 10;
+    UserProfileClosed user_profile_closed = 11;
+    UserCommandDispatched user_command_dispatched = 12;
+    OffChainActionLogged off_chain_action_logged = 13;
+  }
 }

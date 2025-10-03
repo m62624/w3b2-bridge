@@ -166,6 +166,12 @@ impl UserListener {
         self.service_listeners.insert(target_admin_pda, tx);
         rx
     }
+
+    /// Consumes the listener and returns its underlying receiver channels.
+    /// This is useful for moving the channels into separate tasks, like in `tokio::select!`.
+    pub fn into_parts(self) -> (mpsc::Receiver<BridgeEvent>, mpsc::Receiver<BridgeEvent>) {
+        (self.personal_events_rx, self.all_interactions_rx)
+    }
 }
 
 // --- Admin Listener ---
@@ -282,6 +288,22 @@ impl AdminListener {
     /// Emits events when a new user creates a profile for this admin.
     pub fn new_user_profiles(&mut self) -> &mut mpsc::Receiver<BridgeEvent> {
         &mut self.new_user_profiles_rx
+    }
+
+    /// Consumes the listener and returns its underlying receiver channels.
+    /// This is useful for moving the channels into separate tasks, like in `tokio::select!`.
+    pub fn into_parts(
+        self,
+    ) -> (
+        mpsc::Receiver<BridgeEvent>,
+        mpsc::Receiver<BridgeEvent>,
+        mpsc::Receiver<BridgeEvent>,
+    ) {
+        (
+            self.personal_events_rx,
+            self.incoming_user_commands_rx,
+            self.new_user_profiles_rx,
+        )
     }
 }
 

@@ -17,6 +17,18 @@ import "types.proto";
 
 service BridgeGatewayService {
 
+  // ===================================================================
+  // == Event Streaming RPCs
+  // ===================================================================
+
+  /// Subscribes to and streams categorized events for a specific User.
+  /// The stream will continue to send messages until the client disconnects.
+  rpc ListenAsUser(ListenRequest) returns (stream UserEventStream);
+
+  /// Subscribes to and streams categorized events for a specific Admin.
+  /// The stream will continue to send messages until the client disconnects.
+  rpc ListenAsAdmin(ListenRequest) returns (stream AdminEventStream);
+
   // === Step 1: Prepare transaction endpoints ===
 
   // Admin Methods
