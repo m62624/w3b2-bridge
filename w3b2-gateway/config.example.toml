@@ -1,0 +1,24 @@
+# This is the main config file for the W3B2 Gateway service.
+
+# Settings for the core connector library are nested under this key.
+# These will be deserialized into the `ConnectorConfig` struct.
+[connector]
+[connector.solana]
+rpc_url = "http://127.0.0.1:8899"
+ws_url = "ws://127.0.0.1:8900"
+commitment = "Confirmed"
+
+[connector.synchronizer]
+max_catchup_depth = 72000
+poll_interval_secs = 3
+max_signature_fetch = 1000
+
+# NEW: Settings specific to the Gateway application itself.
+[gateway]
+# Path to the Sled database for both storage and keystore.
+db_path = "./w3b2_gateway.db"
+
+# gRPC server settings.
+[gateway.grpc]
+host = "127.0.0.1"
+port = 50051

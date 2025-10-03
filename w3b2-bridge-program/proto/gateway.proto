@@ -1,0 +1,57 @@
+// File: proto/gateway.proto
+syntax = "proto3";
+
+package w3b2.bridge.gateway;
+
+import "types.proto";
+
+// ===================================================================
+// == Service Definition: BridgeGatewayService (Non-Custodial)
+// ===================================================================
+// This service follows a two-step "prepare-then-submit" flow.
+// 1. The client calls a specific "Prepare" method to get an unsigned
+// transaction.
+// 2. The client signs this transaction locally on their device.
+// 3. The client sends the signed transaction back using the generic "Submit"
+// method. This ensures the user's private key NEVER leaves their device.
+
+service BridgeGatewayService {
+
+  // === Step 1: Prepare transaction endpoints ===
+
+  // Admin Methods
+  rpc PrepareAdminRegisterProfile(PrepareAdminRegisterProfileRequest)
+      returns (UnsignedTransactionResponse);
+  rpc PrepareAdminUpdateCommKey(PrepareAdminUpdateCommKeyRequest)
+      returns (UnsignedTransactionResponse);
+  rpc PrepareAdminUpdatePrices(PrepareAdminUpdatePricesRequest)
+      returns (UnsignedTransactionResponse);
+  rpc PrepareAdminWithdraw(PrepareAdminWithdrawRequest)
+      returns (UnsignedTransactionResponse);
+  rpc PrepareAdminCloseProfile(PrepareAdminCloseProfileRequest)
+      returns (UnsignedTransactionResponse);
+  rpc PrepareAdminDispatchCommand(PrepareAdminDispatchCommandRequest)
+      returns (UnsignedTransactionResponse);
+
+  // User Methods
+  rpc PrepareUserCreateProfile(PrepareUserCreateProfileRequest)
+      returns (UnsignedTransactionResponse);
+  rpc PrepareUserUpdateCommKey(PrepareUserUpdateCommKeyRequest)
+      returns (UnsignedTransactionResponse);
+  rpc PrepareUserDeposit(PrepareUserDepositRequest)
+      returns (UnsignedTransactionResponse);
+  rpc PrepareUserWithdraw(PrepareUserWithdrawRequest)
+      returns (UnsignedTransactionResponse);
+  rpc PrepareUserCloseProfile(PrepareUserCloseProfileRequest)
+      returns (UnsignedTransactionResponse);
+  rpc PrepareUserDispatchCommand(PrepareUserDispatchCommandRequest)
+      returns (UnsignedTransactionResponse);
+
+  // Operational Methods
+  rpc PrepareLogAction(PrepareLogActionRequest)
+      returns (UnsignedTransactionResponse);
+
+  // === Step 2: A single endpoint to submit any signed transaction ===
+
+  rpc SubmitTransaction(SubmitTransactionRequest) returns (TransactionResponse);
+}

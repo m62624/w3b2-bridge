@@ -1,0 +1,122 @@
+// File: proto/types.proto
+syntax = "proto3";
+
+package w3b2.bridge.gateway;
+
+// Represents a single price entry, used in requests that update prices.
+message PriceEntry {
+  // The unique identifier for the command.
+  uint32 command_id = 1;
+  // The price in lamports for executing this command.
+  uint64 price = 2;
+}
+
+// ===================================================================
+// == Core RPC Message Types
+// ===================================================================
+
+// A response containing a transaction that needs to be signed by the client.
+message UnsignedTransactionResponse {
+  // The transaction, serialized using bincode and then encoded in Base64.
+  // The client must decode this, sign it with their private key,
+  // re-serialize it, and send it back via the SubmitTransaction RPC.
+  string unsigned_tx_base64 = 1;
+}
+
+// A generic request to submit a pre-signed transaction to the network.
+message SubmitTransactionRequest {
+  // The transaction, already signed by the client, serialized using bincode
+  // and then encoded in Base64.
+  string signed_tx_base64 = 1;
+}
+
+// Standard response for an RPC that successfully submits a transaction.
+message TransactionResponse {
+  // The Base58-encoded transaction signature (hash).
+  string signature = 1;
+}
+
+// ===================================================================
+// == "Prepare" Transaction Request Messages
+// ===================================================================
+// Each 'Prepare' request includes the public key of the user who will
+// ultimately sign and pay for the transaction.
+
+// --- Admin Requests ---
+
+message PrepareAdminRegisterProfileRequest {
+  string authority_pubkey = 1;
+  string communication_pubkey = 2;
+}
+
+message PrepareAdminUpdateCommKeyRequest {
+  string authority_pubkey = 1;
+  string new_key = 2;
+}
+
+message PrepareAdminUpdatePricesRequest {
+  string authority_pubkey = 1;
+  repeated PriceEntry new_prices = 2;
+}
+
+message PrepareAdminWithdrawRequest {
+  string authority_pubkey = 1;
+  uint64 amount = 2;
+  string destination = 3;
+}
+
+message PrepareAdminCloseProfileRequest { string authority_pubkey = 1; }
+
+message PrepareAdminDispatchCommandRequest {
+  string authority_pubkey = 1;
+  string target_user_profile_pda = 2;
+  uint64 command_id = 3;
+  bytes payload = 4;
+}
+
+// --- User Requests ---
+
+message PrepareUserCreateProfileRequest {
+  string authority_pubkey = 1;
+  string target_admin_pda = 2;
+  string communication_pubkey = 3;
+}
+
+message PrepareUserUpdateCommKeyRequest {
+  string authority_pubkey = 1;
+  string admin_profile_pda = 2;
+  string new_key = 3;
+}
+
+message PrepareUserDepositRequest {
+  string authority_pubkey = 1;
+  string admin_profile_pda = 2;
+  uint64 amount = 3;
+}
+
+message PrepareUserWithdrawRequest {
+  string authority_pubkey = 1;
+  string admin_profile_pda = 2;
+  uint64 amount = 3;
+  string destination = 4;
+}
+
+message PrepareUserCloseProfileRequest {
+  string authority_pubkey = 1;
+  string admin_profile_pda = 2;
+}
+
+message PrepareUserDispatchCommandRequest {
+  string authority_pubkey = 1;
+  string admin_profile_pda = 2;
+  uint32 command_id = 3;
+  bytes payload = 4;
+}
+
+// --- Operational Requests ---
+
+message PrepareLogActionRequest {
+  string authority_pubkey = 1;
+  uint64 session_id = 2;
+  uint32 action_code = 3;
+}

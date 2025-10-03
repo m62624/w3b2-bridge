@@ -1,10 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["w3b2-bridge-program", "w3b2-connector"]
+members = ["w3b2-bridge-program", "w3b2-connector", "w3b2-gateway"]
 
 [workspace.dependencies]
 # internal
 w3b2-bridge-program = { path = "w3b2-bridge-program" }
+w3b2-connector = { path = "w3b2-connector" }
 
 # external
 anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }

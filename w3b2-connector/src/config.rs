@@ -1,37 +1,40 @@
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+
 use solana_sdk::commitment_config::CommitmentLevel;
 
 /// Represents the core configuration required by the w3b2-connector library.
 /// This struct should be created by the user of the library and passed to the EventManager.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub struct ConnectorConfig {
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub solana: Solana,
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub synchronizer: Synchronizer,
 }
 
 /// Solana network connection settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub struct Solana {
     pub rpc_url: String,
     pub ws_url: String,
-    #[serde(with = "serde_commitment")]
+    #[cfg_attr(feature = "serde", serde(with = "serde_commitment"))]
     pub commitment: CommitmentLevel,
 }
 
 /// Settings for the event synchronizer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub struct Synchronizer {
     pub max_catchup_depth: Option<u64>,
     pub poll_interval_secs: u64,
     pub max_signature_fetch: usize,
 }
-
-// --- Default Implementations ---
 
 impl Default for ConnectorConfig {
     fn default() -> Self {
@@ -62,9 +65,11 @@ impl Default for Synchronizer {
     }
 }
 
-// FIXED: This module now works directly with CommitmentLevel, not Option<...>.
+// Весь этот модуль нужен только для serde, поэтому оборачиваем его целиком
+#[cfg(feature = "serde")]
 mod serde_commitment {
     use super::*;
+    // Этот use нужен внутри модуля, когда он активен
     use serde::{Deserializer, Serializer};
 
     pub fn serialize<S>(c: &CommitmentLevel, serializer: S) -> Result<S::Ok, S::Error>
@@ -88,7 +93,6 @@ mod serde_commitment {
             "processed" => CommitmentLevel::Processed,
             "confirmed" => CommitmentLevel::Confirmed,
             "finalized" => CommitmentLevel::Finalized,
-            // Fallback to Confirmed if the string is unrecognized
             _ => CommitmentLevel::Confirmed,
         };
         Ok(level)

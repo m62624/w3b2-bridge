@@ -8,7 +8,7 @@ anchor-lang.workspace = true
 anyhow.workspace = true
 bincode.workspace = true
 borsh.workspace = true
-serde.workspace = true
+serde = { workspace = true, optional = true }
 sled.workspace = true
 solana-client.workspace = true
 solana-rpc-client-api.workspace = true
@@ -21,21 +21,12 @@ w3b2-bridge-program.workspace = true
 base64 = "0.22.1"
 tracing = "0.1.41"
 async-trait = "0.1.89"
-bip39 = { version = "2.2.0", features = ["rand"] }
-secrecy = "0.10.3"
-argon2 = "0.5.3"
-aes-gcm = "0.10.3"
 serde_json = "1.0.145"
-zeroize = "1.8.1"
 dashmap = "6.1.0"
 thiserror = "2.0.16"
 
 [dev-dependencies]
 dirs = "6.0.0"
 
-[[test]]
-name = "program_instructions"
-path = "tests/program_instructions.rs"
-
-# [build-dependencies]
-# tonic-build = "0.11"
+[features]
+serde = ["dep:serde"]

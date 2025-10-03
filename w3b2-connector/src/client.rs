@@ -1,94 +1,84 @@
-use crate::keystore::ChainCard;
+// File: w3b2-connector/src/client.rs
+
 use anchor_lang::{InstructionData, ToAccountMetas};
 use solana_client::client_error::ClientError;
 use solana_client::nonblocking::rpc_client::RpcClient;
+use solana_sdk::instruction::Instruction;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
-use solana_sdk::{instruction::Instruction, transaction::Transaction};
-use w3b2_bridge_program::state::UpdatePricesArgs;
-use w3b2_bridge_program::{accounts, instruction, state::PriceEntry};
-
+use solana_sdk::transaction::Transaction;
 use std::sync::Arc;
+use w3b2_bridge_program::{
+    accounts, instruction,
+    state::{PriceEntry, UpdatePricesArgs},
+};
 
-/// A lightweight, clonable client for interacting with the W3B2 Bridge Program.
+/// A client for preparing on-chain transactions for remote signing.
 ///
-/// This client is designed to be instantiated for a specific `ChainCard`, representing
-/// a single user or admin identity. It shares a common `RpcClient` instance via an `Arc`
-/// to efficiently manage connections to the Solana cluster.
+/// This struct provides methods to construct unsigned transactions for every
+/// instruction in the W3B2 Bridge Program. It is designed for a non-custodial
+/// architecture where the private key never leaves the client's device.
+/// The server-side component (like a gRPC gateway) uses this builder to create
+/// a transaction, sends it to the client for signing, and then receives the
+/// signed transaction back for submission.
 #[derive(Clone)]
-pub struct OnChainClient {
+pub struct TransactionBuilder {
     /// A shared, thread-safe reference to the Solana JSON RPC client.
     rpc_client: Arc<RpcClient>,
-    /// A shared, thread-safe reference to the `ChainCard` identity that this client
-    /// will use to sign and pay for all transactions.
-    chain_card: Arc<ChainCard>,
 }
 
-impl OnChainClient {
-    /// Creates a new on-chain client session for a specific `ChainCard`.
+impl TransactionBuilder {
+    /// Creates a new TransactionBuilder.
     ///
     /// # Arguments
     ///
     /// * `rpc_client` - A shared `Arc<RpcClient>` for communicating with the Solana cluster.
-    /// * `chain_card` - A shared `Arc<ChainCard>` representing the identity that will sign transactions.
-    pub fn new(rpc_client: Arc<RpcClient>, chain_card: Arc<ChainCard>) -> Self {
-        Self {
-            rpc_client,
-            chain_card,
-        }
+    pub fn new(rpc_client: Arc<RpcClient>) -> Self {
+        Self { rpc_client }
     }
 
-    /// Returns a reference to the underlying `RpcClient`.
-    pub fn rpc_client(&self) -> &RpcClient {
-        &self.rpc_client
-    }
-
-    /// Returns a reference to the underlying `ChainCard` identity.
-    pub fn chain_card(&self) -> &ChainCard {
-        &self.chain_card
-    }
-
-    /// A private helper function to build, sign, and send a transaction
-    /// containing a single instruction.
+    /// Submits a fully signed transaction to the Solana network.
     ///
-    /// This method handles fetching the latest blockhash, signing the transaction
-    /// with the instance's `ChainCard`, and sending it to the cluster for confirmation.
+    /// This is the final step in the remote signing flow. After a client signs
+    /// the transaction prepared by one of the `prepare_` methods, the signed
+    /// transaction is sent back to the server and submitted via this method.
     ///
     /// # Arguments
     ///
-    /// * `ix` - The single `Instruction` to be included in the transaction.
+    /// * `transaction` - A `Transaction` object that has already been signed.
     ///
     /// # Returns
     ///
-    /// A `Result` containing the `Signature` of the confirmed transaction, or a `ClientError`.
-    async fn send_tx(&self, ix: Instruction) -> Result<Signature, ClientError> {
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&self.chain_card.authority()));
-        let recent_blockhash = self.rpc_client.get_latest_blockhash().await?;
-        tx.sign(&[self.chain_card.keypair()], recent_blockhash);
-        let signature = self.rpc_client.send_and_confirm_transaction(&tx).await?;
-        Ok(signature)
+    /// A `Result` containing the `Signature` of the confirmed transaction.
+    pub async fn submit_transaction(
+        &self,
+        transaction: &Transaction,
+    ) -> Result<Signature, ClientError> {
+        self.rpc_client
+            .send_and_confirm_transaction(transaction)
+            .await
     }
 
-    /// Sends an `admin_register_profile` transaction to initialize a new `AdminProfile` PDA.
-    ///
-    /// The new PDA will be owned by this client's `ChainCard` authority.
+    // --- Admin Transaction Preparations ---
+
+    /// Prepares an `admin_register_profile` transaction.
     ///
     /// # Arguments
     ///
+    /// * `authority` - The public key of the admin who will sign the transaction.
     /// * `communication_pubkey` - The public key for secure off-chain communication.
-    pub async fn admin_register_profile(
+    pub async fn prepare_admin_register_profile(
         &self,
+        authority: Pubkey,
         communication_pubkey: Pubkey,
-    ) -> Result<Signature, ClientError> {
-        let (admin_pda, _) = Pubkey::find_program_address(
-            &[b"admin", self.chain_card.authority().as_ref()],
-            &w3b2_bridge_program::ID,
-        );
+    ) -> Result<Transaction, ClientError> {
+        let (admin_pda, _) =
+            Pubkey::find_program_address(&[b"admin", authority.as_ref()], &w3b2_bridge_program::ID);
 
         let ix = Instruction {
             program_id: w3b2_bridge_program::ID,
             accounts: accounts::AdminRegisterProfile {
-                authority: self.chain_card.authority(),
+                authority,
                 admin_profile: admin_pda,
                 system_program: solana_sdk::system_program::id(),
             }
@@ -99,57 +89,50 @@ impl OnChainClient {
             .data(),
         };
 
-        self.send_tx(ix).await
+        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
+        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
+        tx.message.recent_blockhash = latest_blockhash;
+        Ok(tx)
     }
 
-    // NOTE: Place these methods inside the `impl OnChainClient` block from Part 1.
-
-    // --- Admin Methods ---
-
-    /// Sends an `admin_update_comm_key` transaction to update the communication public key.
-    ///
-    /// # Arguments
-    ///
-    /// * `new_key` - The new communication public key to set.
-    pub async fn admin_update_comm_key(&self, new_key: Pubkey) -> Result<Signature, ClientError> {
-        let (admin_pda, _) = Pubkey::find_program_address(
-            &[b"admin", self.chain_card.authority().as_ref()],
-            &w3b2_bridge_program::ID,
-        );
+    /// Prepares an `admin_update_comm_key` transaction.
+    pub async fn prepare_admin_update_comm_key(
+        &self,
+        authority: Pubkey,
+        new_key: Pubkey,
+    ) -> Result<Transaction, ClientError> {
+        let (admin_pda, _) =
+            Pubkey::find_program_address(&[b"admin", authority.as_ref()], &w3b2_bridge_program::ID);
 
         let ix = Instruction {
             program_id: w3b2_bridge_program::ID,
             accounts: accounts::AdminUpdateCommKey {
-                authority: self.chain_card.authority(),
+                authority,
                 admin_profile: admin_pda,
             }
             .to_account_metas(None),
             data: instruction::AdminUpdateCommKey { new_key }.data(),
         };
 
-        self.send_tx(ix).await
+        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
+        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
+        tx.message.recent_blockhash = latest_blockhash;
+        Ok(tx)
     }
 
-    /// Sends an `admin_update_prices` transaction to set a new service price list.
-    ///
-    /// This will trigger a `realloc` on the `AdminProfile` PDA to fit the new data.
-    ///
-    /// # Arguments
-    ///
-    /// * `new_prices` - A vector of `PriceEntry` structs defining the new prices.
-    pub async fn admin_update_prices(
+    /// Prepares an `admin_update_prices` transaction.
+    pub async fn prepare_admin_update_prices(
         &self,
+        authority: Pubkey,
         new_prices: Vec<PriceEntry>,
-    ) -> Result<Signature, ClientError> {
-        let (admin_pda, _) = Pubkey::find_program_address(
-            &[b"admin", self.chain_card.authority().as_ref()],
-            &w3b2_bridge_program::ID,
-        );
+    ) -> Result<Transaction, ClientError> {
+        let (admin_pda, _) =
+            Pubkey::find_program_address(&[b"admin", authority.as_ref()], &w3b2_bridge_program::ID);
 
         let ix = Instruction {
             program_id: w3b2_bridge_program::ID,
             accounts: accounts::AdminUpdatePrices {
-                authority: self.chain_card.authority(),
+                authority,
                 admin_profile: admin_pda,
                 system_program: solana_sdk::system_program::id(),
             }
@@ -160,29 +143,26 @@ impl OnChainClient {
             .data(),
         };
 
-        self.send_tx(ix).await
+        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
+        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
+        tx.message.recent_blockhash = latest_blockhash;
+        Ok(tx)
     }
 
-    /// Sends an `admin_withdraw` transaction to withdraw earned funds from the `AdminProfile`.
-    ///
-    /// # Arguments
-    ///
-    /// * `amount` - The amount of lamports to withdraw.
-    /// * `destination` - The public key of the account that will receive the funds.
-    pub async fn admin_withdraw(
+    /// Prepares an `admin_withdraw` transaction.
+    pub async fn prepare_admin_withdraw(
         &self,
+        authority: Pubkey,
         amount: u64,
         destination: Pubkey,
-    ) -> Result<Signature, ClientError> {
-        let (admin_pda, _) = Pubkey::find_program_address(
-            &[b"admin", self.chain_card.authority().as_ref()],
-            &w3b2_bridge_program::ID,
-        );
+    ) -> Result<Transaction, ClientError> {
+        let (admin_pda, _) =
+            Pubkey::find_program_address(&[b"admin", authority.as_ref()], &w3b2_bridge_program::ID);
 
         let ix = Instruction {
             program_id: w3b2_bridge_program::ID,
             accounts: accounts::AdminWithdraw {
-                authority: self.chain_card.authority(),
+                authority,
                 admin_profile: admin_pda,
                 destination,
                 system_program: solana_sdk::system_program::id(),
@@ -191,53 +171,51 @@ impl OnChainClient {
             data: instruction::AdminWithdraw { amount }.data(),
         };
 
-        self.send_tx(ix).await
+        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
+        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
+        tx.message.recent_blockhash = latest_blockhash;
+        Ok(tx)
     }
 
-    /// Sends an `admin_close_profile` transaction to close the `AdminProfile` PDA.
-    ///
-    /// The rent lamports from the closed account will be refunded to the admin's authority `ChainCard`.
-    pub async fn admin_close_profile(&self) -> Result<Signature, ClientError> {
-        let (admin_pda, _) = Pubkey::find_program_address(
-            &[b"admin", self.chain_card.authority().as_ref()],
-            &w3b2_bridge_program::ID,
-        );
+    /// Prepares an `admin_close_profile` transaction.
+    pub async fn prepare_admin_close_profile(
+        &self,
+        authority: Pubkey,
+    ) -> Result<Transaction, ClientError> {
+        let (admin_pda, _) =
+            Pubkey::find_program_address(&[b"admin", authority.as_ref()], &w3b2_bridge_program::ID);
 
         let ix = Instruction {
             program_id: w3b2_bridge_program::ID,
             accounts: accounts::AdminCloseProfile {
-                authority: self.chain_card.authority(),
+                authority,
                 admin_profile: admin_pda,
             }
             .to_account_metas(None),
             data: instruction::AdminCloseProfile {}.data(),
         };
 
-        self.send_tx(ix).await
+        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
+        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
+        tx.message.recent_blockhash = latest_blockhash;
+        Ok(tx)
     }
 
-    /// Sends an `admin_dispatch_command` transaction to send a command/notification to a user.
-    ///
-    /// # Arguments
-    ///
-    /// * `target_user_profile_pda` - The PDA address of the target `UserProfile`.
-    /// * `command_id` - The identifier for the command being sent.
-    /// * `payload` - A byte vector containing the command's payload.
-    pub async fn admin_dispatch_command(
+    /// Prepares an `admin_dispatch_command` transaction.
+    pub async fn prepare_admin_dispatch_command(
         &self,
+        authority: Pubkey,
         target_user_profile_pda: Pubkey,
         command_id: u64,
         payload: Vec<u8>,
-    ) -> Result<Signature, ClientError> {
-        let (admin_pda, _) = Pubkey::find_program_address(
-            &[b"admin", self.chain_card.authority().as_ref()],
-            &w3b2_bridge_program::ID,
-        );
+    ) -> Result<Transaction, ClientError> {
+        let (admin_pda, _) =
+            Pubkey::find_program_address(&[b"admin", authority.as_ref()], &w3b2_bridge_program::ID);
 
         let ix = Instruction {
             program_id: w3b2_bridge_program::ID,
             accounts: accounts::AdminDispatchCommand {
-                admin_authority: self.chain_card.authority(),
+                admin_authority: authority,
                 admin_profile: admin_pda,
                 user_profile: target_user_profile_pda,
             }
@@ -249,35 +227,30 @@ impl OnChainClient {
             .data(),
         };
 
-        self.send_tx(ix).await
+        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
+        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
+        tx.message.recent_blockhash = latest_blockhash;
+        Ok(tx)
     }
 
-    // --- User Methods ---
+    // --- User Transaction Preparations ---
 
-    /// Sends a `user_create_profile` transaction to create a `UserProfile` PDA for a specific service.
-    ///
-    /// # Arguments
-    ///
-    /// * `target_admin_pda` - The PDA address of the `AdminProfile` this user is linking to.
-    /// * `communication_pubkey` - The user's public key for off-chain communication.
-    pub async fn user_create_profile(
+    /// Prepares a `user_create_profile` transaction.
+    pub async fn prepare_user_create_profile(
         &self,
+        authority: Pubkey,
         target_admin_pda: Pubkey,
         communication_pubkey: Pubkey,
-    ) -> Result<Signature, ClientError> {
+    ) -> Result<Transaction, ClientError> {
         let (user_pda, _) = Pubkey::find_program_address(
-            &[
-                b"user",
-                self.chain_card.authority().as_ref(),
-                target_admin_pda.as_ref(),
-            ],
+            &[b"user", authority.as_ref(), target_admin_pda.as_ref()],
             &w3b2_bridge_program::ID,
         );
 
         let ix = Instruction {
             program_id: w3b2_bridge_program::ID,
             accounts: accounts::UserCreateProfile {
-                authority: self.chain_card.authority(),
+                authority,
                 user_profile: user_pda,
                 system_program: solana_sdk::system_program::id(),
             }
@@ -289,106 +262,90 @@ impl OnChainClient {
             .data(),
         };
 
-        self.send_tx(ix).await
+        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
+        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
+        tx.message.recent_blockhash = latest_blockhash;
+        Ok(tx)
     }
 
-    /// Sends a `user_update_comm_key` transaction to update the user's communication key.
-    ///
-    /// # Arguments
-    ///
-    /// * `admin_profile_pda` - The PDA of the admin profile this user profile is linked to.
-    /// * `new_key` - The new communication public key.
-    pub async fn user_update_comm_key(
+    /// Prepares a `user_update_comm_key` transaction.
+    pub async fn prepare_user_update_comm_key(
         &self,
+        authority: Pubkey,
         admin_profile_pda: Pubkey,
         new_key: Pubkey,
-    ) -> Result<Signature, ClientError> {
+    ) -> Result<Transaction, ClientError> {
         let (user_pda, _) = Pubkey::find_program_address(
-            &[
-                b"user",
-                self.chain_card.authority().as_ref(),
-                admin_profile_pda.as_ref(),
-            ],
+            &[b"user", authority.as_ref(), admin_profile_pda.as_ref()],
             &w3b2_bridge_program::ID,
         );
 
         let ix = Instruction {
             program_id: w3b2_bridge_program::ID,
             accounts: accounts::UserUpdateCommKey {
-                authority: self.chain_card.authority(),
-                admin_profile: admin_profile_pda,
+                authority,
                 user_profile: user_pda,
+                admin_profile: admin_profile_pda,
             }
             .to_account_metas(None),
             data: instruction::UserUpdateCommKey { new_key }.data(),
         };
 
-        self.send_tx(ix).await
+        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
+        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
+        tx.message.recent_blockhash = latest_blockhash;
+        Ok(tx)
     }
 
-    /// Sends a `user_deposit` transaction to add funds to the `UserProfile` deposit balance.
-    ///
-    /// # Arguments
-    ///
-    /// * `admin_profile_pda` - The PDA of the admin profile this user profile is linked to.
-    /// * `amount` - The amount of lamports to deposit.
-    pub async fn user_deposit(
+    /// Prepares a `user_deposit` transaction.
+    pub async fn prepare_user_deposit(
         &self,
+        authority: Pubkey,
         admin_profile_pda: Pubkey,
         amount: u64,
-    ) -> Result<Signature, ClientError> {
+    ) -> Result<Transaction, ClientError> {
         let (user_pda, _) = Pubkey::find_program_address(
-            &[
-                b"user",
-                self.chain_card.authority().as_ref(),
-                admin_profile_pda.as_ref(),
-            ],
+            &[b"user", authority.as_ref(), admin_profile_pda.as_ref()],
             &w3b2_bridge_program::ID,
         );
 
         let ix = Instruction {
             program_id: w3b2_bridge_program::ID,
             accounts: accounts::UserDeposit {
-                authority: self.chain_card.authority(),
-                admin_profile: admin_profile_pda,
+                authority,
                 user_profile: user_pda,
+                admin_profile: admin_profile_pda,
                 system_program: solana_sdk::system_program::id(),
             }
             .to_account_metas(None),
             data: instruction::UserDeposit { amount }.data(),
         };
 
-        self.send_tx(ix).await
+        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
+        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
+        tx.message.recent_blockhash = latest_blockhash;
+        Ok(tx)
     }
 
-    /// Sends a `user_withdraw` transaction to retrieve funds from the `UserProfile` deposit balance.
-    ///
-    /// # Arguments
-    ///
-    /// * `admin_profile_pda` - The PDA of the admin profile this user profile is linked to.
-    /// * `amount` - The amount of lamports to withdraw.
-    /// * `destination` - The public key of the account that will receive the funds.
-    pub async fn user_withdraw(
+    /// Prepares a `user_withdraw` transaction.
+    pub async fn prepare_user_withdraw(
         &self,
+        authority: Pubkey,
         admin_profile_pda: Pubkey,
         amount: u64,
         destination: Pubkey,
-    ) -> Result<Signature, ClientError> {
+    ) -> Result<Transaction, ClientError> {
         let (user_pda, _) = Pubkey::find_program_address(
-            &[
-                b"user",
-                self.chain_card.authority().as_ref(),
-                admin_profile_pda.as_ref(),
-            ],
+            &[b"user", authority.as_ref(), admin_profile_pda.as_ref()],
             &w3b2_bridge_program::ID,
         );
 
         let ix = Instruction {
             program_id: w3b2_bridge_program::ID,
             accounts: accounts::UserWithdraw {
-                authority: self.chain_card.authority(),
-                admin_profile: admin_profile_pda,
+                authority,
                 user_profile: user_pda,
+                admin_profile: admin_profile_pda,
                 destination,
                 system_program: solana_sdk::system_program::id(),
             }
@@ -396,74 +353,59 @@ impl OnChainClient {
             data: instruction::UserWithdraw { amount }.data(),
         };
 
-        self.send_tx(ix).await
+        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
+        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
+        tx.message.recent_blockhash = latest_blockhash;
+        Ok(tx)
     }
 
-    /// Sends a `user_close_profile` transaction to close the `UserProfile` PDA.
-    ///
-    /// All remaining funds (deposit and rent) will be refunded to the user's `ChainCard`.
-    ///
-    /// # Arguments
-    ///
-    /// * `admin_profile_pda` - The PDA of the admin profile this user profile is linked to.
-    pub async fn user_close_profile(
+    /// Prepares a `user_close_profile` transaction.
+    pub async fn prepare_user_close_profile(
         &self,
+        authority: Pubkey,
         admin_profile_pda: Pubkey,
-    ) -> Result<Signature, ClientError> {
+    ) -> Result<Transaction, ClientError> {
         let (user_pda, _) = Pubkey::find_program_address(
-            &[
-                b"user",
-                self.chain_card.authority().as_ref(),
-                admin_profile_pda.as_ref(),
-            ],
+            &[b"user", authority.as_ref(), admin_profile_pda.as_ref()],
             &w3b2_bridge_program::ID,
         );
 
         let ix = Instruction {
             program_id: w3b2_bridge_program::ID,
             accounts: accounts::UserCloseProfile {
-                authority: self.chain_card.authority(),
-                admin_profile: admin_profile_pda,
+                authority,
                 user_profile: user_pda,
+                admin_profile: admin_profile_pda,
             }
             .to_account_metas(None),
             data: instruction::UserCloseProfile {}.data(),
         };
 
-        self.send_tx(ix).await
+        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
+        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
+        tx.message.recent_blockhash = latest_blockhash;
+        Ok(tx)
     }
 
-    // --- Operational Methods ---
+    // --- Operational Transaction Preparations ---
 
-    /// Sends a `user_dispatch_command` transaction to call a service's API.
-    ///
-    /// This is the primary operational instruction for users. It will handle payment
-    /// if the command has a non-zero price in the admin's price list.
-    ///
-    /// # Arguments
-    ///
-    /// * `admin_profile_pda` - The PDA of the target `AdminProfile` service.
-    /// * `command_id` - The identifier of the command to execute.
-    /// * `payload` - A byte vector containing the command's payload.
-    pub async fn user_dispatch_command(
+    /// Prepares a `user_dispatch_command` transaction.
+    pub async fn prepare_user_dispatch_command(
         &self,
+        authority: Pubkey,
         admin_profile_pda: Pubkey,
         command_id: u16,
         payload: Vec<u8>,
-    ) -> Result<Signature, ClientError> {
+    ) -> Result<Transaction, ClientError> {
         let (user_pda, _) = Pubkey::find_program_address(
-            &[
-                b"user",
-                self.chain_card.authority().as_ref(),
-                admin_profile_pda.as_ref(),
-            ],
+            &[b"user", authority.as_ref(), admin_profile_pda.as_ref()],
             &w3b2_bridge_program::ID,
         );
 
         let ix = Instruction {
             program_id: w3b2_bridge_program::ID,
             accounts: accounts::UserDispatchCommand {
-                authority: self.chain_card.authority(),
+                authority,
                 user_profile: user_pda,
                 admin_profile: admin_profile_pda,
                 system_program: solana_sdk::system_program::id(),
@@ -476,26 +418,22 @@ impl OnChainClient {
             .data(),
         };
 
-        self.send_tx(ix).await
+        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
+        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
+        tx.message.recent_blockhash = latest_blockhash;
+        Ok(tx)
     }
 
-    /// Sends a `log_action` transaction to record an off-chain event on the blockchain.
-    ///
-    /// # Arguments
-    ///
-    /// * `session_id` - A generic identifier for grouping related actions.
-    /// * `action_code` - A numeric code representing the specific action that occurred.
-    pub async fn log_action(
+    /// Prepares a `log_action` transaction.
+    pub async fn prepare_log_action(
         &self,
+        authority: Pubkey,
         session_id: u64,
         action_code: u16,
-    ) -> Result<Signature, ClientError> {
+    ) -> Result<Transaction, ClientError> {
         let ix = Instruction {
             program_id: w3b2_bridge_program::ID,
-            accounts: accounts::LogAction {
-                authority: self.chain_card.authority(),
-            }
-            .to_account_metas(None),
+            accounts: accounts::LogAction { authority }.to_account_metas(None),
             data: instruction::LogAction {
                 session_id,
                 action_code,
@@ -503,16 +441,9 @@ impl OnChainClient {
             .data(),
         };
 
-        self.send_tx(ix).await
-    }
-}
-
-// Custom Debug implementation to avoid printing the entire RpcClient.
-impl std::fmt::Debug for OnChainClient {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OnChainClient")
-            .field("rpc_client", &"&RpcClient")
-            .field("chain_card", &self.chain_card)
-            .finish()
+        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
+        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
+        tx.message.recent_blockhash = latest_blockhash;
+        Ok(tx)
     }
 }
