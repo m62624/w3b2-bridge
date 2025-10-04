@@ -32,7 +32,7 @@ use crate::{
         PrepareUserWithdrawRequest, StopListenerRequest, SubmitTransactionRequest,
         SubscribeToService, TransactionResponse, UnsignedTransactionResponse,
         UnsubscribeFromService, UserEventStream, UserStreamCommand,
-        admin_event_stream::EventCategory as AdminEventCategory, bridge_event,
+        admin_event_stream::EventCategory as AdminEventCategory,
         user_event_stream::EventCategory as UserEventCategory, user_stream_command,
     },
     storage::SledStorage,
@@ -336,7 +336,7 @@ impl BridgeGatewayService for GatewayServer {
                             // Convert the whole connector event to a proto event first
                             let proto_event: gateway::BridgeEvent = event.into();
                             // Then extract the specific event type we need
-                            if let Some(bridge_event::Event::UserCommandDispatched(specific_event)) = proto_event.event {
+                            if let Some(gateway::bridge_event::Event::UserCommandDispatched(specific_event)) = proto_event.event {
                                  let stream_msg = AdminEventStream {
                                      event_category: Some(AdminEventCategory::IncomingUserCommand(specific_event)),
                                  };
@@ -346,7 +346,7 @@ impl BridgeGatewayService for GatewayServer {
                         },
                         Some(event) = new_users_rx.recv() => {
                             let proto_event: gateway::BridgeEvent = event.into();
-                            if let Some(bridge_event::Event::UserProfileCreated(specific_event)) = proto_event.event {
+                            if let Some(gateway::bridge_event::Event::UserProfileCreated(specific_event)) = proto_event.event {
                                  let stream_msg = AdminEventStream {
                                      event_category: Some(AdminEventCategory::NewUserProfile(specific_event)),
                                  };

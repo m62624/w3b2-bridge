@@ -115,13 +115,16 @@ impl UserListener {
 
                     // --- Interaction Events ---
                     BridgeEvent::UserProfileCreated(e) if e.authority == pubkey => {
-                        handle_interaction(&event, &all_interactions_tx, &service_listeners_clone);
+                        handle_interaction(event, &all_interactions_tx, &service_listeners_clone)
+                            .await;
                     }
                     BridgeEvent::UserCommandDispatched(e) if e.sender == pubkey => {
-                        handle_interaction(&event, &all_interactions_tx, &service_listeners_clone);
+                        handle_interaction(event, &all_interactions_tx, &service_listeners_clone)
+                            .await;
                     }
                     BridgeEvent::AdminCommandDispatched(e) if e.target_user_authority == pubkey => {
-                        handle_interaction(&event, &all_interactions_tx, &service_listeners_clone);
+                        handle_interaction(event, &all_interactions_tx, &service_listeners_clone)
+                            .await;
                     }
                     _ => {}
                 }
@@ -326,17 +329,25 @@ impl AdminListener {
 /// Routes the event into the **all service interactions** channel,
 /// and, if a matching admin-specific listener exists,
 /// into the appropriate service-specific channel as well.
-fn handle_interaction(
-    event: &BridgeEvent,
+async fn handle_interaction(
+    event: BridgeEvent,
     all_interactions_tx: &broadcast::Sender<BridgeEvent>,
     service_listeners: &Arc<DashMap<Pubkey, mpsc::Sender<BridgeEvent>>>,
 ) {
     if all_interactions_tx.send(event.clone()).is_err() {
-        return;
+        // This can happen if no one is listening to the `all_service_interactions` stream.
+        // It's not a critical error, but worth noting.
+        tracing::debug!("No active receivers for 'all_service_interactions' broadcast channel.");
     }
-    if let Some(admin_pubkey) = get_admin_pubkey_from_interaction(event) {
+
+    if let Some(admin_pubkey) = get_admin_pubkey_from_interaction(&event) {
         if let Some(specific_tx) = service_listeners.get(&admin_pubkey) {
-            let _ = specific_tx.try_send(event.clone());
+            if specific_tx.send(event).await.is_err() {
+                tracing::warn!(
+                    "Failed to send to service-specific channel for {}. Receiver dropped.",
+                    admin_pubkey
+                );
+            }
         }
     }
 }
