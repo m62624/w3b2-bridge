@@ -23,6 +23,7 @@ pub enum Commands {
 #[derive(Parser, Debug)]
 pub struct RunCmd {
     /// Path to the gateway configuration TOML file.
-    #[arg(short, long, default_value = "gateway-config.toml")]
-    pub config: String,
+    /// If not provided, default values will be used.
+    #[arg(short, long)]
+    pub config: Option<String>,
 }

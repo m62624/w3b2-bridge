@@ -10,3 +10,4 @@ test-ledger
 build
 dist
 w3b2_db
+w3b2_gateway.db

@@ -6,12 +6,12 @@
 # The HTTP RPC endpoint of the Solana cluster.
 # Example for local validator: "http://127.0.0.1:8899"
 # Example for Solana Devnet: "https://api.devnet.solana.com"
-rpc_url = "http://127.0.0.1:8899"
+rpc-url = "http://127.0.0.1:8899"
 
 # The WebSocket endpoint for real-time event subscriptions.
 # Example for local validator: "ws://127.0.0.1:8900"
 # Example for Solana Devnet: "wss://api.devnet.solana.com"
-ws_url = "ws://127.0.0.1:8900"
+ws-url = "ws://127.0.0.1:8900"
 
 # The commitment level to use for fetching transactions.
 # Determines how finalized a block must be before it's considered confirmed.
@@ -34,11 +34,11 @@ commitment = "Confirmed"
 # If this is set, the catch-up worker will not process transactions older than
 # (current_slot - max_catchup_depth).
 # Comment out or remove this line to scan the entire history.
-max_catchup_depth = 72000
+max-catchup_depth = 72000
 
 # The interval in seconds at which the catch-up worker polls for new transaction signatures.
-poll_interval_secs = 3
+poll-interval_secs = 3
 
 # The maximum number of transaction signatures to fetch in a single RPC call.
 # The maximum allowed by public RPC nodes is typically 1000.
-max_signature_fetch = 1000
+max-signature_fetch = 1000

@@ -3,7 +3,7 @@ use serde::Deserialize;
 use w3b2_connector::config::ConnectorConfig;
 
 /// The top-level configuration for the W3B2 Gateway application.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct GatewayConfig {
     #[serde(default)]
@@ -23,6 +23,9 @@ pub struct GatewaySpecificConfig {
     /// Configuration for gRPC event streaming.
     #[serde(default)]
     pub streaming: StreamingConfig,
+    /// Logging configuration.
+    #[serde(default)]
+    pub log: LogConfig,
 }
 
 /// gRPC server connection settings.
@@ -49,12 +52,43 @@ pub struct StreamingConfig {
     pub service_listener_capacity: usize,
 }
 
+/// Logging configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct LogConfig {
+    /// Log level, e.g., "info", "debug", "trace".
+    pub level: String,
+    /// Log output format.
+    pub format: LogFormat,
+    /// Log output destination.
+    pub output: LogOutput,
+    /// Path to the log file, required if output is "file".
+    pub file_path: Option<String>,
+}
+
+/// Defines the format for log messages.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LogFormat {
+    Plain,
+    Json,
+}
+
+/// Defines the destination for log output.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LogOutput {
+    Stdout,
+    File,
+}
+
 impl Default for GatewaySpecificConfig {
     fn default() -> Self {
         Self {
             db_path: "./w3b2_gateway.db".to_string(),
             grpc: GrpcConfig::default(),
-            streaming: StreamingConfig::default(), // Add default
+            streaming: StreamingConfig::default(),
+            log: LogConfig::default(),
         }
     }
 }
@@ -76,6 +110,17 @@ impl Default for GrpcConfig {
         Self {
             host: "127.0.0.1".to_string(),
             port: 50051,
+        }
+    }
+}
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        Self {
+            level: "info".to_string(),
+            format: LogFormat::Plain,
+            output: LogOutput::Stdout,
+            file_path: None,
         }
     }
 }

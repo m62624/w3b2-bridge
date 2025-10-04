@@ -1,31 +1,66 @@
-# This is the main config file for the W3B2 Gateway service.
-
-# Settings for the core connector library are nested under this key.
-# These will be deserialized into the `ConnectorConfig` struct.
+# Settings for the core `w3b2-connector` library, which handles
+# the direct communication with the Solana blockchain.
 [connector]
+
+# --- Solana Network Configuration ---
 [connector.solana]
-rpc_url = "http://127.0.0.1:8899"
-ws_url = "ws://127.0.0.1:8900"
+# The HTTP RPC endpoint of the Solana node.
+rpc-url = "http://127.0.0.1:8899"
+# The WebSocket endpoint of the Solana node for live event streaming.
+ws-url = "ws://127.0.0.1:8900"
+# The commitment level to use for fetching data.
+# Possible values: "Processed", "Confirmed", "Finalized"
 commitment = "Confirmed"
 
+# --- Event Synchronizer Configuration ---
 [connector.synchronizer]
-max_catchup_depth = 72000
-poll_interval_secs = 3
-max_signature_fetch = 1000
+# The maximum number of slots to look back during the catch-up process.
+# A value of 72000 is roughly 12 hours. Omitting it means no limit.
+max-catchup-depth = 72000
+# The interval in seconds at which the catch-up worker polls for historical transactions.
+poll-interval-secs = 3
+# The maximum number of transaction signatures to fetch in a single RPC call.
+max-signature-fetch = 1000
 
-# NEW: Settings specific to the Gateway application itself.
+# ===================================================================
+# == Gateway Application Settings
+# ===================================================================
+# Settings specific to the Gateway application binary.
 [gateway]
-# Path to the Sled database for both storage and keystore.
-db_path = "./w3b2_gateway.db"
+# Path to the Sled database file for storing synchronization state.
+db-path = "./w3b2_gateway.db"
 
+# --- Event Streaming Channel Capacities ---
 [gateway.streaming]
+# Buffer capacity for the main broadcast channel (from Synchronizer to Dispatcher).
 broadcast-capacity = 4096
+# Buffer capacity for the command channel to the Dispatcher (for subscriptions).
 command-capacity = 256
+# Buffer capacity for a listener's internal channels (e.g., personal_events).
 listener-channel-capacity = 1024
+# Buffer capacity for the main gRPC output stream to a single client.
 output-stream-capacity = 1024
+# Buffer capacity for a specific service listener channel created by a user.
 service-listener-capacity = 256
 
-# gRPC server settings.
+# --- gRPC Server Configuration ---
 [gateway.grpc]
 host = "127.0.0.1"
 port = 50051
+
+# --- Logging Configuration ---
+[gateway.log]
+# The minimum level of logs to record.
+# Possible values: "trace", "debug", "info", "warn", "error"
+level = "info"
+
+# The format for log output.
+# Possible values: "plain" (human-readable text), "json" (structured for machines)
+format = "plain"
+
+# The destination for log output.
+# Possible values: "stdout" (console), "file"
+output = "stdout"
+
+# The path to the log file. This is required if `output` is set to "file".
+# file-path = "/var/log/w3b2-gateway.log"

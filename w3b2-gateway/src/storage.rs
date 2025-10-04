@@ -1,11 +1,5 @@
 /// Provides concrete `sled`-based implementations for the storage traits
 /// defined in the `w3b2-connector` library.
-///
-/// This module contains:
-/// - `SledStorage`: An implementation of the `Storage` trait for synchronizer state.
-/// - `SledKeystore`: An implementation of the `Keystore` trait for securely
-///   managing encrypted `ChainCard` identities.
-///
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use sled::{Db, transaction::TransactionalTree};
