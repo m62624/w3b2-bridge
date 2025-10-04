@@ -59,6 +59,21 @@ impl TransactionBuilder {
             .await
     }
 
+    /// A private helper function to create a transaction from a single instruction.
+    ///
+    /// This function encapsulates the boilerplate of fetching the latest blockhash
+    /// and creating a new transaction with a payer.
+    async fn create_transaction(
+        &self,
+        payer: &Pubkey,
+        instruction: Instruction,
+    ) -> Result<Transaction, ClientError> {
+        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
+        let mut tx = Transaction::new_with_payer(&[instruction], Some(payer));
+        tx.message.recent_blockhash = latest_blockhash;
+        Ok(tx)
+    }
+
     // --- Admin Transaction Preparations ---
 
     /// Prepares an `admin_register_profile` transaction.
@@ -89,10 +104,7 @@ impl TransactionBuilder {
             .data(),
         };
 
-        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
-        tx.message.recent_blockhash = latest_blockhash;
-        Ok(tx)
+        self.create_transaction(&authority, ix).await
     }
 
     /// Prepares an `admin_update_comm_key` transaction.
@@ -114,10 +126,7 @@ impl TransactionBuilder {
             data: instruction::AdminUpdateCommKey { new_key }.data(),
         };
 
-        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
-        tx.message.recent_blockhash = latest_blockhash;
-        Ok(tx)
+        self.create_transaction(&authority, ix).await
     }
 
     /// Prepares an `admin_update_prices` transaction.
@@ -143,10 +152,7 @@ impl TransactionBuilder {
             .data(),
         };
 
-        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
-        tx.message.recent_blockhash = latest_blockhash;
-        Ok(tx)
+        self.create_transaction(&authority, ix).await
     }
 
     /// Prepares an `admin_withdraw` transaction.
@@ -171,10 +177,7 @@ impl TransactionBuilder {
             data: instruction::AdminWithdraw { amount }.data(),
         };
 
-        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
-        tx.message.recent_blockhash = latest_blockhash;
-        Ok(tx)
+        self.create_transaction(&authority, ix).await
     }
 
     /// Prepares an `admin_close_profile` transaction.
@@ -195,10 +198,7 @@ impl TransactionBuilder {
             data: instruction::AdminCloseProfile {}.data(),
         };
 
-        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
-        tx.message.recent_blockhash = latest_blockhash;
-        Ok(tx)
+        self.create_transaction(&authority, ix).await
     }
 
     /// Prepares an `admin_dispatch_command` transaction.
@@ -227,10 +227,7 @@ impl TransactionBuilder {
             .data(),
         };
 
-        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
-        tx.message.recent_blockhash = latest_blockhash;
-        Ok(tx)
+        self.create_transaction(&authority, ix).await
     }
 
     // --- User Transaction Preparations ---
@@ -262,10 +259,7 @@ impl TransactionBuilder {
             .data(),
         };
 
-        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
-        tx.message.recent_blockhash = latest_blockhash;
-        Ok(tx)
+        self.create_transaction(&authority, ix).await
     }
 
     /// Prepares a `user_update_comm_key` transaction.
@@ -291,10 +285,7 @@ impl TransactionBuilder {
             data: instruction::UserUpdateCommKey { new_key }.data(),
         };
 
-        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
-        tx.message.recent_blockhash = latest_blockhash;
-        Ok(tx)
+        self.create_transaction(&authority, ix).await
     }
 
     /// Prepares a `user_deposit` transaction.
@@ -321,10 +312,7 @@ impl TransactionBuilder {
             data: instruction::UserDeposit { amount }.data(),
         };
 
-        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
-        tx.message.recent_blockhash = latest_blockhash;
-        Ok(tx)
+        self.create_transaction(&authority, ix).await
     }
 
     /// Prepares a `user_withdraw` transaction.
@@ -353,10 +341,7 @@ impl TransactionBuilder {
             data: instruction::UserWithdraw { amount }.data(),
         };
 
-        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
-        tx.message.recent_blockhash = latest_blockhash;
-        Ok(tx)
+        self.create_transaction(&authority, ix).await
     }
 
     /// Prepares a `user_close_profile` transaction.
@@ -381,10 +366,7 @@ impl TransactionBuilder {
             data: instruction::UserCloseProfile {}.data(),
         };
 
-        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
-        tx.message.recent_blockhash = latest_blockhash;
-        Ok(tx)
+        self.create_transaction(&authority, ix).await
     }
 
     // --- Operational Transaction Preparations ---
@@ -418,10 +400,7 @@ impl TransactionBuilder {
             .data(),
         };
 
-        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
-        tx.message.recent_blockhash = latest_blockhash;
-        Ok(tx)
+        self.create_transaction(&authority, ix).await
     }
 
     /// Prepares a `log_action` transaction.
@@ -441,9 +420,6 @@ impl TransactionBuilder {
             .data(),
         };
 
-        let latest_blockhash = self.rpc_client.get_latest_blockhash().await?;
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&authority));
-        tx.message.recent_blockhash = latest_blockhash;
-        Ok(tx)
+        self.create_transaction(&authority, ix).await
     }
 }
