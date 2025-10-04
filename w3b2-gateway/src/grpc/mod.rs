@@ -4,31 +4,36 @@ use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
 use std::str::FromStr;
 use std::sync::Arc;
+use tokio::sync::mpsc;
+use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, transport::Server};
 use w3b2_connector::{
     Accounts::PriceEntry,
     client::TransactionBuilder,
-    listener::AdminListener,
+    listener::{self, AdminListener},
     workers::{EventManager, EventManagerHandle},
 };
+use std::collections::HashMap;
 
+use crate::grpc::proto::w3b2::bridge::gateway::bridge_gateway_service_server::{
+    BridgeGatewayService, BridgeGatewayServiceServer,
+};
 use crate::{
     config::GatewayConfig,
     error::GatewayError,
     grpc::proto::w3b2::bridge::gateway::{
-        AdminEventStream, BridgeEvent, ListenAsAdminRequest, ListenAsUserRequest,
+        self, AdminEventStream,  ListenAsAdminRequest,
         PrepareAdminCloseProfileRequest, PrepareAdminDispatchCommandRequest,
         PrepareAdminRegisterProfileRequest, PrepareAdminUpdateCommKeyRequest,
         PrepareAdminUpdatePricesRequest, PrepareAdminWithdrawRequest, PrepareLogActionRequest,
         PrepareUserCloseProfileRequest, PrepareUserCreateProfileRequest, PrepareUserDepositRequest,
         PrepareUserDispatchCommandRequest, PrepareUserUpdateCommKeyRequest,
-        PrepareUserWithdrawRequest, SubmitTransactionRequest, TransactionResponse,
-        UnsignedTransactionResponse, UnsubscribeRequest, UserEventStream,
-        admin_event_stream::EventCategory as AdminEventCategory,
-        bridge_event,
-        bridge_gateway_service_server::{BridgeGatewayService, BridgeGatewayServiceServer},
-        user_event_stream::EventCategory as UserEventCategory,
+        PrepareUserWithdrawRequest, StopListenerRequest, SubmitTransactionRequest,
+        SubscribeToService, TransactionResponse, UnsignedTransactionResponse,
+        UnsubscribeFromService, UserEventStream, UserStreamCommand,
+        admin_event_stream::EventCategory as AdminEventCategory, bridge_event,
+        user_event_stream::EventCategory as UserEventCategory, user_stream_command,
     },
     storage::SledStorage,
 };
@@ -42,6 +47,7 @@ pub mod proto {
         }
     }
 }
+
 
 #[derive(Clone)]
 pub struct AppState {
@@ -61,6 +67,20 @@ impl GatewayServer {
         Self { state }
     }
 }
+
+    async fn forward_events(
+        service_rx: &mut mpsc::Receiver<listener::BridgeEvent>,
+        inner_tx: &mpsc::Sender<gateway::BridgeEvent>,
+    ) {
+        while let Some(event) = service_rx.recv().await {
+            // Convert the connector event into a gateway (proto) event before sending.
+            let proto_event: gateway::BridgeEvent = event.into();
+
+            if inner_tx.send(proto_event).await.is_err() {
+                break;
+            }
+        }
+    }
 
 /// The main entry point to start the gRPC server and all background services.
 pub async fn start(config: &GatewayConfig) -> Result<EventManagerHandle> {
@@ -126,74 +146,148 @@ impl BridgeGatewayService for GatewayServer {
 
     async fn listen_as_user(
         &self,
-        request: Request<ListenAsUserRequest>,
+        request: Request<tonic::Streaming<UserStreamCommand>>,
     ) -> Result<Response<Self::ListenAsUserStream>, Status> {
-        let result: Result<Response<Self::ListenAsUserStream>, GatewayError> = (async {
-            tracing::info!(
-                "Received ListenAsUser request: {:?}",
-                request.get_ref()
-            );
+        let mut in_stream = request.into_inner();
+        let state = self.state.clone();
 
-            let req = request.into_inner();
+        // The first message MUST be an `Init` command.
+        let initial_command = in_stream.next().await.ok_or_else(|| {
+            Status::invalid_argument("Stream is empty, expected InitUserStream command")
+        })??;
 
-            // Use config-driven capacities.
+        let init_req = match initial_command.command {
+            Some(user_stream_command::Command::Init(init)) => init,
+            _ => {
+                return Err(Status::invalid_argument(
+                    "First message must be InitUserStream",
+                ));
+            }
+        };
+
+        tracing::info!("Received ListenAsUser request: {:?}", init_req);
+
+        let result: Result<Response<Self::ListenAsUserStream>, GatewayError> = (async move {
             let listener_capacity = self.state.config.gateway.streaming.listener_channel_capacity;
             let service_listener_capacity = self.state.config.gateway.streaming.service_listener_capacity;
             let output_capacity = self.state.config.gateway.streaming.output_stream_capacity;
 
-            let pubkey = parse_pubkey(&req.user_pubkey)?;
+            let pubkey = parse_pubkey(&init_req.user_pubkey)?;
 
             tracing::debug!("Creating user listener for pubkey: {}", pubkey);
-            let user_listener = self.state.event_manager.listen_as_user(pubkey, listener_capacity).await;
+            let user_listener = Arc::new(state.event_manager.listen_as_user(pubkey, listener_capacity).await);
 
-            let mut specific_service_rxs = Vec::new();
-            for pda_str in req.specific_services_to_follow {
+            // Channel for merging all specific service events into one stream.
+            let (specific_tx, mut specific_rx_merged) = mpsc::channel(output_capacity);
+
+            // Store senders for specific services to be able to close them on unsubscribe.
+            let service_senders = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+
+            // Handle initial subscriptions
+            for pda_str in init_req.initial_services_to_follow {
                 let pda = parse_pubkey(&pda_str)?;
                 tracing::debug!("Subscribing user {} to specific service PDA: {}", pubkey, pda);
-                specific_service_rxs.push(user_listener.listen_for_service(pda, service_listener_capacity));
-            }
-
-            let (mut personal_rx, mut interactions_rx) = user_listener.into_parts();
-            let (tx, rx) = tokio::sync::mpsc::channel(output_capacity);
-            let event_manager = self.state.event_manager.clone();
-
-            tokio::spawn(async move {
-                // Task for merging specific service listeners
-                 let (specific_tx, mut specific_rx_merged) = tokio::sync::mpsc::channel(output_capacity);
-
-            for mut service_rx in specific_service_rxs {
+                let mut service_rx =
+                    user_listener.listen_for_service(pda, service_listener_capacity); // This is idempotent
                 let inner_tx = specific_tx.clone();
+                let (tx_close, mut rx_close) = mpsc::channel::<()>(1);
+                service_senders.lock().await.insert(pda, tx_close);
                 tokio::spawn(async move {
-                    while let Some(event) = service_rx.recv().await {
-                        if inner_tx.send(event).await.is_err() { break; }
-                    }
+                    tokio::select! {
+                        _ = rx_close.recv() => {}, // Task is cancelled
+                        _ = forward_events(&mut service_rx, &inner_tx) => {}
+                    };
                 });
             }
-            drop(specific_tx);
 
-                loop {
-                    tokio::select! {
-                        biased;
+            // Get clonable broadcast receivers for the select loop.
+            let mut personal_rx = user_listener.personal_events();
+            let mut interactions_rx = user_listener.all_service_interactions();
+            let (tx, rx) = mpsc::channel(output_capacity);
+            let service_senders_clone = service_senders.clone();
 
-                        Some(event) = personal_rx.recv() => {
-                            let msg = UserEventStream { event_category: Some(UserEventCategory::PersonalEvent(event.into())) };
-                            tracing::debug!("Forwarding personal event to user {}: {:?}", pubkey, msg);
-                            if tx.send(Ok(msg)).await.is_err() { break; }
+            // The main task that multiplexes all events and commands.
+            tokio::spawn(async move {
+                loop { tokio::select! {
+                    // --- Handle outgoing events to the client ---
+                    result = personal_rx.recv() => {
+                        match result {
+                            Ok(event) => {
+                                let msg = UserEventStream { event_category: Some(UserEventCategory::PersonalEvent(event.into())) };
+                                tracing::debug!("Forwarding personal event to user {}: {:?}", pubkey, msg);
+                                if tx.send(Ok(msg)).await.is_err() { break; }
+                            },
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                tracing::warn!("User {} event stream lagged by {} messages.", pubkey, n);
+                            },
+                            Err(_) => break, // Channel closed
+                        }
+                    },
+                    result = interactions_rx.recv() => {
+                        match result {
+                            Ok(event) => {
+                                let msg = UserEventStream { event_category: Some(UserEventCategory::ServiceInteractionEvent(event.into())) };
+                                tracing::debug!("Forwarding service interaction event to user {}: {:?}", pubkey, msg);
+                                if tx.send(Ok(msg)).await.is_err() { break; }
+                            },
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                tracing::warn!("User {} interaction stream lagged by {} messages.", pubkey, n);
+                            },
+                            Err(_) => break, // Channel closed,
+                        }
                         },
-                        Some(event) = interactions_rx.recv() => {
-                            let msg = UserEventStream { event_category: Some(UserEventCategory::ServiceInteractionEvent(event.into())) };
-                            tracing::debug!("Forwarding service interaction event to user {}: {:?}", pubkey, msg);
-                            if tx.send(Ok(msg)).await.is_err() { break; }
+                        Some(event) = specific_rx_merged.recv() => { // This now receives BridgeEvent directly
+                                let msg = UserEventStream { event_category: Some(UserEventCategory::ServiceSpecificEvent(event.into())) };
+                                tracing::debug!("Forwarding service-specific event to user {}: {:?}", pubkey, msg);
+                                if tx.send(Ok(msg)).await.is_err() { break; }
                         },
-                        Some(event) = specific_rx_merged.recv() => {
-                            let msg = UserEventStream { event_category: Some(UserEventCategory::ServiceSpecificEvent(event.into())) };
-                            tracing::debug!("Forwarding service-specific event to user {}: {:?}", pubkey, msg);
-                            if tx.send(Ok(msg)).await.is_err() { break; }
+
+                        // --- Handle incoming commands from the client ---
+                        Some(result) = in_stream.next() => {
+                            match result {
+                                Ok(command) => {
+                                    match command.command {
+                                        Some(user_stream_command::Command::Subscribe(SubscribeToService { service_pda })) => {
+                                            if let Ok(pda) = parse_pubkey(&service_pda) {
+                                                 tracing::info!("Dynamically subscribing user {} to service {}", pubkey, pda);
+                                                 let mut service_rx = user_listener.listen_for_service(pda, service_listener_capacity);
+                                                 let inner_tx = specific_tx.clone();
+                                                 let (tx_close, mut rx_close) = mpsc::channel::<()>(1);
+                                                 service_senders_clone.lock().await.insert(pda, tx_close);
+ 
+                                                 tokio::spawn(async move {
+                                                     tokio::select! {
+                                                         _ = rx_close.recv() => {}, // Task is cancelled
+                                                         _ = forward_events(&mut service_rx, &inner_tx) => {}
+                                                     };
+                                                 });
+                                            } else {
+                                                tracing::warn!("Failed to parse pubkey from subscribe command: {}", service_pda);
+                                            }
+                                        },
+                                        Some(user_stream_command::Command::Unsubscribe(UnsubscribeFromService { service_pda })) => {
+                                            if let Ok(pda) = parse_pubkey(&service_pda) {
+                                                 tracing::info!("Dynamically unsubscribing user {} from service {}", pubkey, pda);
+                                                 if let Some(tx_close) = service_senders_clone.lock().await.remove(&pda) {
+                                                     let _ = tx_close.send(()).await;
+                                                 }
+                                                 // This will drop the sender and cause the receiver loop to exit
+                                                 user_listener.stop_listening_for_service(pda);
+                                            } else {
+                                                tracing::warn!("Failed to parse pubkey from unsubscribe command: {}", service_pda);
+                                            }
+                                        },
+                                        _ => {} // Ignore Init or empty commands after the first one
+                                    }
+                                },
+                                Err(_) => break, // Client stream errored or closed
+                            }
                         },
                         else => { break; }
                     }
                 }
-                event_manager.unsubscribe(pubkey).await;
+                tracing::info!("User stream for {} ended. Unsubscribing from event manager.", pubkey);
+                state.event_manager.unsubscribe(pubkey).await;
             });
 
             Ok(Response::new(ReceiverStream::new(rx)))
@@ -232,35 +326,38 @@ impl BridgeGatewayService for GatewayServer {
                 loop {
                     tokio::select! {
                         Some(event) = personal_rx.recv() => {
-                            let stream_msg = AdminEventStream {
-                                 event_category: Some(AdminEventCategory::PersonalEvent(event.into())),
-                            };
+                            let stream_msg = AdminEventStream { event_category: Some(
+                                AdminEventCategory::PersonalEvent(event.into()),
+                            )};
                             tracing::debug!("Forwarding personal event to admin {}: {:?}", pubkey, stream_msg);
                             if tx.send(Ok(stream_msg)).await.is_err() { break; }
                         },
                         Some(event) = commands_rx.recv() => {
-                            let proto_event: BridgeEvent = event.into();
-                            if let Some(bridge_event::Event::UserCommandDispatched(proto_specific_event)) = proto_event.event {
-                                let stream_msg = AdminEventStream {
-                                    event_category: Some(AdminEventCategory::IncomingUserCommand(proto_specific_event)),
-                                };
-                                tracing::debug!("Forwarding incoming user command to admin {}: {:?}", pubkey, stream_msg);
-                                if tx.send(Ok(stream_msg)).await.is_err() { break; }
+                            // Convert the whole connector event to a proto event first
+                            let proto_event: gateway::BridgeEvent = event.into();
+                            // Then extract the specific event type we need
+                            if let Some(bridge_event::Event::UserCommandDispatched(specific_event)) = proto_event.event {
+                                 let stream_msg = AdminEventStream {
+                                     event_category: Some(AdminEventCategory::IncomingUserCommand(specific_event)),
+                                 };
+                                 tracing::debug!("Forwarding incoming user command to admin {}: {:?}", pubkey, stream_msg);
+                                 if tx.send(Ok(stream_msg)).await.is_err() { break; }
                             }
                         },
                         Some(event) = new_users_rx.recv() => {
-                            let proto_event: BridgeEvent = event.into();
-                            if let Some(bridge_event::Event::UserProfileCreated(proto_specific_event)) = proto_event.event {
-                               let stream_msg = AdminEventStream {
-                                   event_category: Some(AdminEventCategory::NewUserProfile(proto_specific_event)),
-                               };
-                               tracing::debug!("Forwarding new user profile event to admin {}: {:?}", pubkey, stream_msg);
-                               if tx.send(Ok(stream_msg)).await.is_err() { break; }
+                            let proto_event: gateway::BridgeEvent = event.into();
+                            if let Some(bridge_event::Event::UserProfileCreated(specific_event)) = proto_event.event {
+                                 let stream_msg = AdminEventStream {
+                                     event_category: Some(AdminEventCategory::NewUserProfile(specific_event)),
+                                 };
+                                 tracing::debug!("Forwarding new user profile event to admin {}: {:?}", pubkey, stream_msg);
+                                 if tx.send(Ok(stream_msg)).await.is_err() { break; }
                             }
                         },
                         else => { break; }
                     }
                 }
+                tracing::info!("Admin stream for {} ended. Unsubscribing from event manager.", pubkey);
                 event_manager.unsubscribe(pubkey).await;
             });
 
@@ -271,15 +368,17 @@ impl BridgeGatewayService for GatewayServer {
         result.map_err(Status::from)
     }
 
-    async fn unsubscribe(
+  
+
+    async fn stop_listener(
         &self,
-        request: Request<UnsubscribeRequest>,
+        request: Request<StopListenerRequest>,
     ) -> Result<Response<()>, Status> {
         let result: Result<Response<()>, GatewayError> = (async {
-            tracing::info!("Received Unsubscribe request: {:?}", request.get_ref());
+            tracing::info!("Received StopListener request: {:?}", request.get_ref());
 
             let req = request.into_inner();
-            let pubkey = parse_pubkey(&req.pubkey_to_unsubscribe)?;
+            let pubkey = parse_pubkey(&req.pubkey_to_stop)?;
             tracing::info!("Received explicit unsubscribe request for {}", pubkey);
             self.state.event_manager.unsubscribe(pubkey).await;
             Ok(Response::new(()))

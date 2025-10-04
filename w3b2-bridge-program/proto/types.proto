@@ -87,27 +87,34 @@ message PrepareLogActionRequest {
 
 // --- Messages for Event Streaming ---
 
-// A request to start listening for user events.
-message ListenAsUserRequest {
+// --- Messages for the User Stream (ListenAsUser RPC) ---
+
+// The very first message a client MUST send on the ListenAsUser stream.
+message InitUserStream {
   // The user's public key to monitor.
   string user_pubkey = 1;
-  // Optional: A list of specific service admin PDAs to create
-  // dedicated, filtered streams for.
-  repeated string specific_services_to_follow = 2;
+  // Optional: A list of specific service admin PDAs to subscribe to
+  // immediately.
+  repeated string initial_services_to_follow = 2;
 }
 
-// A request to start listening for admin events.
-message ListenAsAdminRequest {
-  // The admin's public key to monitor.
-  string admin_pubkey = 1;
+// A command to subscribe to events from a specific service.
+message SubscribeToService { string service_pda = 1; }
+
+// A command to unsubscribe from events from a specific service.
+message UnsubscribeFromService { string service_pda = 1; }
+
+// A wrapper for commands sent from the client to the server over the user
+// stream.
+message UserStreamCommand {
+  oneof command {
+    InitUserStream init = 1;
+    SubscribeToService subscribe = 2;
+    UnsubscribeFromService unsubscribe = 3;
+  }
 }
 
-message UnsubscribeRequest {
-  // The public key of the listener to unregister.
-  string pubkey_to_unsubscribe = 1;
-}
-
-// A wrapper for events streamed to a User.
+// A wrapper for events streamed to a User (server -> client).
 message UserEventStream {
   oneof event_category {
     // An event related to the user's own profile and funds.
@@ -119,7 +126,15 @@ message UserEventStream {
   }
 }
 
-// A wrapper for events streamed to an Admin.
+// --- Messages for the Admin Stream (ListenAsAdmin RPC) ---
+
+// A request to start listening for admin events.
+message ListenAsAdminRequest {
+  // The admin's public key to monitor.
+  string admin_pubkey = 1;
+}
+
+// A wrapper for events streamed to an Admin (server -> client).
 message AdminEventStream {
   oneof event_category {
     // An event related to the admin's own profile.
@@ -129,6 +144,13 @@ message AdminEventStream {
     // A command dispatched by a user to this admin.
     UserCommandDispatched incoming_user_command = 3;
   }
+}
+
+// --- Messages for General RPCs ---
+
+message StopListenerRequest {
+  // The public key of the listener to stop.
+  string pubkey_to_stop = 1;
 }
 
 message AdminProfileRegistered {

@@ -23,16 +23,19 @@ service BridgeGatewayService {
   // == Event Streaming RPCs
   // ===================================================================
 
-  /// Subscribes to and streams all categorized events for a specific User.
-  rpc ListenAsUser(ListenAsUserRequest) returns (stream UserEventStream);
+  /// Establishes a bi-directional stream for a User. The client sends
+  /// UserStreamCommand messages to manage subscriptions, and the server streams
+  /// back UserEventStream messages. The first message from the client MUST be
+  /// an `InitUserStream` command.
+  rpc ListenAsUser(stream UserStreamCommand) returns (stream UserEventStream);
 
   /// Subscribes to and streams all categorized events for a specific Admin.
   rpc ListenAsAdmin(ListenAsAdminRequest) returns (stream AdminEventStream);
 
-  /// Explicitly unregisters a listener for a given pubkey from the dispatcher.
-  /// While the streaming RPCs handle this automatically on disconnect, this
-  /// provides a manual way to ensure cleanup.
-  rpc Unsubscribe(UnsubscribeRequest) returns (google.protobuf.Empty);
+  /// Explicitly stops a listener for a given pubkey in the EventManager.
+  /// While streams are cleaned up on disconnect, this provides a manual
+  /// override.
+  rpc StopListener(StopListenerRequest) returns (google.protobuf.Empty);
 
   // === Step 1: Prepare transaction endpoints ===
 

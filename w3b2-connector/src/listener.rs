@@ -47,11 +47,11 @@
 //!   commands sent by users to this specific admin.
 //!   - Contains: `UserCommandDispatched`.
 
-use crate::events::BridgeEvent;
+pub use crate::events::BridgeEvent;
 use dashmap::DashMap;
 use solana_sdk::pubkey::Pubkey;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use w3b2_bridge_program::ID as PROGRAM_ID;
 
 // --- User Listener ---
@@ -65,11 +65,12 @@ use w3b2_bridge_program::ID as PROGRAM_ID;
 /// - **all service interactions**: Events capturing *any* user ↔ service interaction.
 /// - **service-specific streams**: Dynamically created channels to isolate interactions with a
 ///   single service/admin.
+#[derive(Debug)]
 pub struct UserListener {
     /// Channel for personal user events.
-    personal_events_rx: mpsc::Receiver<BridgeEvent>,
+    personal_events_rx: broadcast::Receiver<BridgeEvent>,
     /// Channel for all service-related interactions.
-    all_interactions_rx: mpsc::Receiver<BridgeEvent>,
+    all_interactions_rx: broadcast::Receiver<BridgeEvent>,
     /// Map of service-specific listeners keyed by `Admin PDA`.
     service_listeners: Arc<DashMap<Pubkey, mpsc::Sender<BridgeEvent>>>,
 }
@@ -87,8 +88,8 @@ impl UserListener {
         mut raw_event_rx: mpsc::Receiver<BridgeEvent>,
         channel_capacity: usize,
     ) -> Self {
-        let (personal_tx, personal_rx) = mpsc::channel(channel_capacity);
-        let (all_interactions_tx, all_interactions_rx) = mpsc::channel(channel_capacity);
+        let (personal_tx, personal_rx) = broadcast::channel(channel_capacity);
+        let (all_interactions_tx, all_interactions_rx) = broadcast::channel(channel_capacity);
         let service_listeners = Arc::new(DashMap::new());
         let service_listeners_clone = service_listeners.clone();
 
@@ -97,33 +98,30 @@ impl UserListener {
                 match &event {
                     // --- Personal Events ---
                     BridgeEvent::UserFundsDeposited(e) if e.authority == pubkey => {
-                        let _ = personal_tx.send(event).await;
+                        let _ = personal_tx.send(event.clone());
                     }
                     BridgeEvent::UserFundsWithdrawn(e) if e.authority == pubkey => {
-                        let _ = personal_tx.send(event).await;
+                        let _ = personal_tx.send(event.clone());
                     }
                     BridgeEvent::UserCommKeyUpdated(e) if e.authority == pubkey => {
-                        let _ = personal_tx.send(event).await;
+                        let _ = personal_tx.send(event.clone());
                     }
                     BridgeEvent::UserProfileClosed(e) if e.authority == pubkey => {
-                        let _ = personal_tx.send(event).await;
+                        let _ = personal_tx.send(event.clone());
                     }
                     BridgeEvent::OffChainActionLogged(e) if e.actor == pubkey => {
-                        let _ = personal_tx.send(event).await;
+                        let _ = personal_tx.send(event.clone());
                     }
 
                     // --- Interaction Events ---
                     BridgeEvent::UserProfileCreated(e) if e.authority == pubkey => {
-                        handle_interaction(event, &all_interactions_tx, &service_listeners_clone)
-                            .await;
+                        handle_interaction(&event, &all_interactions_tx, &service_listeners_clone);
                     }
                     BridgeEvent::UserCommandDispatched(e) if e.sender == pubkey => {
-                        handle_interaction(event, &all_interactions_tx, &service_listeners_clone)
-                            .await;
+                        handle_interaction(&event, &all_interactions_tx, &service_listeners_clone);
                     }
                     BridgeEvent::AdminCommandDispatched(e) if e.target_user_authority == pubkey => {
-                        handle_interaction(event, &all_interactions_tx, &service_listeners_clone)
-                            .await;
+                        handle_interaction(&event, &all_interactions_tx, &service_listeners_clone);
                     }
                     _ => {}
                 }
@@ -137,18 +135,20 @@ impl UserListener {
         }
     }
 
-    /// Access the channel of **personal user events**.
+    /// Get a receiver for the channel of **personal user events**.
     ///
     /// Events include deposits, withdrawals, comm key updates, and profile closure.
-    pub fn personal_events(&mut self) -> &mut mpsc::Receiver<BridgeEvent> {
-        &mut self.personal_events_rx
+    /// This clones the underlying broadcast receiver.
+    pub fn personal_events(&self) -> broadcast::Receiver<BridgeEvent> {
+        self.personal_events_rx.resubscribe()
     }
 
-    /// Access the channel of **all service interactions**.
+    /// Get a receiver for the channel of **all service interactions**.
     ///
     /// Events include any user ↔ admin relationship creation or command dispatch.
-    pub fn all_service_interactions(&mut self) -> &mut mpsc::Receiver<BridgeEvent> {
-        &mut self.all_interactions_rx
+    /// This clones the underlying broadcast receiver.
+    pub fn all_service_interactions(&self) -> broadcast::Receiver<BridgeEvent> {
+        self.all_interactions_rx.resubscribe()
     }
 
     /// Create a new channel for events tied to a **specific service/admin**.
@@ -171,14 +171,11 @@ impl UserListener {
     ///
     /// This removes the listener from the internal map. The corresponding `Receiver`
     /// on the client side will eventually close as no new messages will be sent.
-    pub fn stop_listening_for_service(&self, target_admin_pda: Pubkey) {
-        self.service_listeners.remove(&target_admin_pda);
-    }
-
-    /// Consumes the listener and returns its underlying receiver channels.
-    /// This is useful for moving the channels into separate tasks, like in `tokio::select!`.
-    pub fn into_parts(self) -> (mpsc::Receiver<BridgeEvent>, mpsc::Receiver<BridgeEvent>) {
-        (self.personal_events_rx, self.all_interactions_rx)
+    pub fn stop_listening_for_service(
+        &self,
+        target_admin_pda: Pubkey,
+    ) -> Option<(Pubkey, mpsc::Sender<BridgeEvent>)> {
+        self.service_listeners.remove(&target_admin_pda)
     }
 }
 
@@ -192,6 +189,7 @@ impl UserListener {
 /// - **personal events**: Admin self-initiated actions.
 /// - **new user profiles**: Discovery of new customers.
 /// - **incoming user commands**: Operational stream of requests from users.
+#[derive(Debug)]
 pub struct AdminListener {
     /// Channel for admin-only events.
     personal_events_rx: mpsc::Receiver<BridgeEvent>,
@@ -256,10 +254,16 @@ impl AdminListener {
                     }
 
                     // --- User → Admin Events ---
-                    BridgeEvent::UserCommandDispatched(e)
-                        if e.target_admin_authority == admin_authority_pubkey =>
-                    {
-                        let _ = commands_tx.send(event).await;
+                    BridgeEvent::UserCommandDispatched(e) => {
+                        // Derive the target admin's PDA from the event data
+                        let target_pda = Pubkey::find_program_address(
+                            &[b"admin", e.target_admin_authority.as_ref()],
+                            &PROGRAM_ID,
+                        )
+                        .0;
+                        if target_pda == admin_pda {
+                            let _ = commands_tx.send(event).await;
+                        }
                     }
                     BridgeEvent::UserProfileCreated(e) if e.target_admin == admin_pda => {
                         let _ = new_users_tx.send(event).await;
@@ -322,30 +326,38 @@ impl AdminListener {
 /// Routes the event into the **all service interactions** channel,
 /// and, if a matching admin-specific listener exists,
 /// into the appropriate service-specific channel as well.
-async fn handle_interaction(
-    event: BridgeEvent,
-    all_interactions_tx: &mpsc::Sender<BridgeEvent>,
+fn handle_interaction(
+    event: &BridgeEvent,
+    all_interactions_tx: &broadcast::Sender<BridgeEvent>,
     service_listeners: &Arc<DashMap<Pubkey, mpsc::Sender<BridgeEvent>>>,
 ) {
-    if all_interactions_tx.send(event.clone()).await.is_err() {
+    if all_interactions_tx.send(event.clone()).is_err() {
         return;
     }
-    if let Some(admin_pubkey) = get_admin_pubkey_from_interaction(&event) {
+    if let Some(admin_pubkey) = get_admin_pubkey_from_interaction(event) {
         if let Some(specific_tx) = service_listeners.get(&admin_pubkey) {
-            let _ = specific_tx.send(event).await;
+            let _ = specific_tx.try_send(event.clone());
         }
     }
 }
 
-/// Extract the relevant admin pubkey (authority or PDA) from an interaction event.
+/// Extract the relevant admin **PDA** from an interaction event.
 ///
 /// Returns `Some(pubkey)` if the event type contains an admin reference,
 /// otherwise returns `None`.
 fn get_admin_pubkey_from_interaction(event: &BridgeEvent) -> Option<Pubkey> {
     match event {
         BridgeEvent::UserProfileCreated(e) => Some(e.target_admin),
-        BridgeEvent::UserCommandDispatched(e) => Some(e.target_admin_authority),
-        BridgeEvent::AdminCommandDispatched(e) => Some(e.sender),
+        BridgeEvent::UserCommandDispatched(e) => Some(
+            Pubkey::find_program_address(
+                &[b"admin", e.target_admin_authority.as_ref()],
+                &PROGRAM_ID,
+            )
+            .0,
+        ),
+        BridgeEvent::AdminCommandDispatched(e) => {
+            Some(Pubkey::find_program_address(&[b"admin", e.sender.as_ref()], &PROGRAM_ID).0)
+        }
         _ => None,
     }
 }
