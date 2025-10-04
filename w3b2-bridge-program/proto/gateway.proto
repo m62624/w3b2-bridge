@@ -5,6 +5,8 @@ package w3b2.bridge.gateway;
 
 import "types.proto";
 
+import "google/protobuf/empty.proto";
+
 // ===================================================================
 // == Service Definition: BridgeGatewayService (Non-Custodial)
 // ===================================================================
@@ -21,13 +23,16 @@ service BridgeGatewayService {
   // == Event Streaming RPCs
   // ===================================================================
 
-  /// Subscribes to and streams categorized events for a specific User.
-  /// The stream will continue to send messages until the client disconnects.
-  rpc ListenAsUser(ListenRequest) returns (stream UserEventStream);
+  /// Subscribes to and streams all categorized events for a specific User.
+  rpc ListenAsUser(ListenAsUserRequest) returns (stream UserEventStream);
 
-  /// Subscribes to and streams categorized events for a specific Admin.
-  /// The stream will continue to send messages until the client disconnects.
-  rpc ListenAsAdmin(ListenRequest) returns (stream AdminEventStream);
+  /// Subscribes to and streams all categorized events for a specific Admin.
+  rpc ListenAsAdmin(ListenAsAdminRequest) returns (stream AdminEventStream);
+
+  /// Explicitly unregisters a listener for a given pubkey from the dispatcher.
+  /// While the streaming RPCs handle this automatically on disconnect, this
+  /// provides a manual way to ensure cleanup.
+  rpc Unsubscribe(UnsubscribeRequest) returns (google.protobuf.Empty);
 
   // === Step 1: Prepare transaction endpoints ===
 

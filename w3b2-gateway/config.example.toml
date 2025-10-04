@@ -18,6 +18,13 @@ max_signature_fetch = 1000
 # Path to the Sled database for both storage and keystore.
 db_path = "./w3b2_gateway.db"
 
+[gateway.streaming]
+broadcast-capacity = 4096
+command-capacity = 256
+listener-channel-capacity = 1024
+output-stream-capacity = 1024
+service-listener-capacity = 256
+
 # gRPC server settings.
 [gateway.grpc]
 host = "127.0.0.1"

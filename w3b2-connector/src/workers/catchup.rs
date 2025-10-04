@@ -24,7 +24,7 @@ impl CatchupWorker {
 
     /// Runs the main catch-up loop.
     /// In each iteration, it fetches new signatures and processes them.
-    pub async fn run(&self) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
         loop {
             // The logic is now broken into smaller, more manageable pieces.
             let signatures = self.fetch_new_signatures().await?;

@@ -6,10 +6,8 @@ use w3b2_connector::config::ConnectorConfig;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct GatewayConfig {
-    /// Configuration for the underlying connector library.
     #[serde(default)]
     pub connector: ConnectorConfig,
-    /// Configuration specific to the gateway service.
     #[serde(default)]
     pub gateway: GatewaySpecificConfig,
 }
@@ -18,11 +16,13 @@ pub struct GatewayConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct GatewaySpecificConfig {
-    /// The file path for the Sled database.
     pub db_path: String,
-    /// gRPC server settings.
     #[serde(default)]
     pub grpc: GrpcConfig,
+    // --- NEW SECTION ---
+    /// Configuration for gRPC event streaming.
+    #[serde(default)]
+    pub streaming: StreamingConfig,
 }
 
 /// gRPC server connection settings.
@@ -33,13 +33,40 @@ pub struct GrpcConfig {
     pub port: u16,
 }
 
-// --- Default Implementations ---
+/// Defines capacities for various channels used in the gateway.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct StreamingConfig {
+    /// The buffer capacity for the main event broadcast channel (from Synchronizer to Dispatcher).
+    pub broadcast_capacity: usize,
+    /// The buffer capacity for the command channel to the Dispatcher.
+    pub command_capacity: usize,
+    /// The buffer capacity for a listener's internal channels (e.g., personal_events).
+    pub listener_channel_capacity: usize,
+    /// The buffer capacity for the main gRPC output stream to a client.
+    pub output_stream_capacity: usize,
+    /// The buffer capacity for a specific service listener channel.
+    pub service_listener_capacity: usize,
+}
 
 impl Default for GatewaySpecificConfig {
     fn default() -> Self {
         Self {
             db_path: "./w3b2_gateway.db".to_string(),
             grpc: GrpcConfig::default(),
+            streaming: StreamingConfig::default(), // Add default
+        }
+    }
+}
+
+impl Default for StreamingConfig {
+    fn default() -> Self {
+        Self {
+            broadcast_capacity: 4096,
+            command_capacity: 256,
+            listener_channel_capacity: 1024,
+            output_stream_capacity: 1024,
+            service_listener_capacity: 256,
         }
     }
 }

@@ -1,5 +1,6 @@
 mod cli;
 mod config;
+mod error;
 mod grpc;
 mod storage;
 

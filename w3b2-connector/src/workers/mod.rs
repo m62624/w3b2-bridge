@@ -40,57 +40,14 @@ impl WorkerContext {
     }
 }
 
-/// The main library client, which manages the connection to Solana and provides
-/// high-level, contextual event listeners. This is the primary entry point for users
-/// of the library.
-pub struct EventManager {
-    synchronizer: Synchronizer,
-    dispatcher: Dispatcher,
+/// A clonable, thread-safe handle for interacting with the EventManager's background services.
+/// This is the primary entry point for users of the library.
+#[derive(Clone)]
+pub struct EventManagerHandle {
     command_tx: mpsc::Sender<DispatcherCommand>,
 }
 
-impl EventManager {
-    pub fn new(
-        config: Arc<ConnectorConfig>,
-        rpc_client: Arc<RpcClient>,
-        storage: Arc<dyn Storage>,
-        broadcast_capacity: usize,
-        registration_capacity: usize,
-    ) -> Self {
-        let (event_tx, event_rx) = broadcast::channel(broadcast_capacity);
-        let (cmd_tx, cmd_rx) = mpsc::channel(registration_capacity);
-
-        let synchronizer = Synchronizer::new(
-            config.clone(),
-            rpc_client.clone(),
-            storage.clone(),
-            event_tx,
-        );
-
-        let dispatcher = Dispatcher::new(event_rx, cmd_rx);
-
-        Self {
-            synchronizer,
-            dispatcher,
-            command_tx: cmd_tx,
-        }
-    }
-
-    /// Runs all background services of the connector.
-    /// This method should be spawned as a background task by the application.
-    pub async fn run(mut self) {
-        tracing::info!("Connector is running all background services.");
-        // We can run them in a select loop to shut down if one of them fails.
-        tokio::select! {
-            _ = self.synchronizer.run() => {
-                tracing::error!("Synchronizer exited unexpectedly.");
-            },
-            _ = self.dispatcher.run() => {
-                tracing::error!("Dispatcher exited unexpectedly.");
-            }
-        }
-    }
-
+impl EventManagerHandle {
     /// (Internal) Creates a raw, un-filtered subscription for a pubkey.
     /// This is the low-level building block for the high-level listeners.
     async fn subscribe_raw(
@@ -152,5 +109,58 @@ impl EventManager {
         let raw_rx = self.subscribe_raw(admin_pubkey, channel_capacity).await;
         // 2. Construct the high-level listener.
         AdminListener::new(admin_pubkey, raw_rx, channel_capacity)
+    }
+}
+
+// The main background service runner.
+/// This struct is created once, its `run` method is spawned, and then it's consumed.
+pub struct EventManager {
+    synchronizer: Synchronizer,
+    dispatcher: Dispatcher,
+}
+
+impl EventManager {
+    pub fn new(
+        config: Arc<ConnectorConfig>,
+        rpc_client: Arc<RpcClient>,
+        storage: Arc<dyn Storage>,
+        broadcast_capacity: usize,
+        command_capacity: usize,
+    ) -> (Self, EventManagerHandle) {
+        let (event_tx, event_rx) = broadcast::channel(broadcast_capacity);
+        let (cmd_tx, cmd_rx) = mpsc::channel(command_capacity);
+
+        let synchronizer = Synchronizer::new(
+            config.clone(),
+            rpc_client.clone(),
+            storage.clone(),
+            event_tx,
+        );
+
+        let dispatcher = Dispatcher::new(event_rx, cmd_rx);
+
+        let runner = Self {
+            synchronizer,
+            dispatcher,
+        };
+
+        let handle = EventManagerHandle { command_tx: cmd_tx };
+
+        (runner, handle)
+    }
+
+    /// Runs all background services of the connector.
+    /// This method should be spawned as a background task by the application.
+    pub async fn run(mut self) {
+        tracing::info!("Connector is running all background services.");
+        // We can run them in a select loop to shut down if one of them fails.
+        tokio::select! {
+            _ = self.synchronizer.run() => {
+                tracing::error!("Synchronizer exited unexpectedly.");
+            },
+            _ = self.dispatcher.run() => {
+                tracing::error!("Dispatcher exited unexpectedly.");
+            }
+        }
     }
 }

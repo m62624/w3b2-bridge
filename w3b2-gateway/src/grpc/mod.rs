@@ -5,30 +5,34 @@ use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::{Request, Response, Status};
+use tonic::{Request, Response, Status, transport::Server};
 use w3b2_connector::{
     Accounts::PriceEntry,
     client::TransactionBuilder,
-    listener::{AdminListener, UserListener},
-    workers::EventManager,
+    listener::AdminListener,
+    workers::{EventManager, EventManagerHandle},
 };
 
 use base64::{Engine as _, engine::general_purpose};
 
 use crate::{
-    config,
+    config::GatewayConfig,
+    error::GatewayError,
     grpc::proto::w3b2::bridge::gateway::{
-        AdminEventStream, BridgeEvent, ListenRequest, PrepareAdminCloseProfileRequest,
-        PrepareAdminDispatchCommandRequest, PrepareAdminRegisterProfileRequest,
-        PrepareAdminUpdateCommKeyRequest, PrepareAdminUpdatePricesRequest,
-        PrepareAdminWithdrawRequest, PrepareLogActionRequest, PrepareUserCloseProfileRequest,
-        PrepareUserCreateProfileRequest, PrepareUserDepositRequest,
+        AdminEventStream, BridgeEvent, ListenAsAdminRequest, ListenAsUserRequest,
+        PrepareAdminCloseProfileRequest, PrepareAdminDispatchCommandRequest,
+        PrepareAdminRegisterProfileRequest, PrepareAdminUpdateCommKeyRequest,
+        PrepareAdminUpdatePricesRequest, PrepareAdminWithdrawRequest, PrepareLogActionRequest,
+        PrepareUserCloseProfileRequest, PrepareUserCreateProfileRequest, PrepareUserDepositRequest,
         PrepareUserDispatchCommandRequest, PrepareUserUpdateCommKeyRequest,
         PrepareUserWithdrawRequest, SubmitTransactionRequest, TransactionResponse,
-        UnsignedTransactionResponse, UserEventStream, admin_event_stream, bridge_event,
+        UnsignedTransactionResponse, UnsubscribeRequest, UserEventStream,
+        admin_event_stream::EventCategory as AdminEventCategory,
+        bridge_event,
         bridge_gateway_service_server::{BridgeGatewayService, BridgeGatewayServiceServer},
-        user_event_stream,
+        user_event_stream::EventCategory as UserEventCategory,
     },
+    storage::SledStorage,
 };
 
 pub mod proto {
@@ -41,580 +45,647 @@ pub mod proto {
     }
 }
 
-/// Shared application state for the gRPC server.
-/// In this non-custodial model, it only needs the RpcClient.
 #[derive(Clone)]
 pub struct AppState {
     pub rpc_client: Arc<RpcClient>,
-    pub event_manager: Arc<EventManager>,
+    pub event_manager: EventManagerHandle,
+    pub config: Arc<GatewayConfig>,
 }
 
+/// gRPC server implementation.
 pub struct GatewayServer {
     state: AppState,
 }
 
 impl GatewayServer {
-    /// Creates a new instance of the GatewayServer.
+    /// Create a new GatewayServer instance.
     pub fn new(state: AppState) -> Self {
         Self { state }
     }
 }
 
+/// The main entry point to start the gRPC server and all background services.
+pub async fn start(config: &GatewayConfig) -> Result<()> {
+    // --- 1. Initialize dependencies ---
+    let db = sled::open(&config.gateway.db_path)?;
+    let storage = Arc::new(SledStorage::new(db));
+    let addr = format!("{}:{}", config.gateway.grpc.host, config.gateway.grpc.port).parse()?;
+    let rpc_client = Arc::new(RpcClient::new(config.connector.solana.rpc_url.clone()));
+
+    // --- 2. Create and spawn the EventManager service ---
+
+    // `EventManager::new` now returns the runner and its handle.
+    let (event_manager_runner, event_manager_handle) = EventManager::new(
+        Arc::new(config.connector.clone()),
+        rpc_client.clone(),
+        storage,
+        config.gateway.streaming.broadcast_capacity,
+        config.gateway.streaming.command_capacity,
+    );
+
+    tokio::spawn(event_manager_runner.run());
+
+    // --- 3. Set up the gRPC server state ---
+
+    // Create the shared state, storing the lightweight `handle` for the RPCs to use.
+    let app_state = AppState {
+        rpc_client,
+        event_manager: event_manager_handle, // Store the handle
+        config: Arc::new(config.clone()),
+    };
+
+    let gateway_server = GatewayServer::new(app_state);
+
+    tracing::info!(
+        "Non-Custodial gRPC Gateway with Event Streaming listening on {}",
+        addr
+    );
+
+    // --- 4. Start the gRPC server ---
+    Server::builder()
+        .add_service(BridgeGatewayServiceServer::new(gateway_server))
+        .serve(addr)
+        .await?;
+
+    Ok(())
+}
+
+// helper: parse a Pubkey returning GatewayError
+fn parse_pubkey(s: &str) -> Result<Pubkey, GatewayError> {
+    Pubkey::from_str(s).map_err(GatewayError::from)
+}
+
 #[tonic::async_trait]
 impl BridgeGatewayService for GatewayServer {
-    // ===================================================================
-    // == Event Streaming Implementations
-    // ===================================================================
-
     type ListenAsUserStream = ReceiverStream<Result<UserEventStream, Status>>;
 
     async fn listen_as_user(
         &self,
-        request: Request<ListenRequest>,
+        request: Request<ListenAsUserRequest>,
     ) -> Result<Response<Self::ListenAsUserStream>, Status> {
-        let req = request.into_inner();
-        let pubkey = Pubkey::from_str(&req.pubkey_to_follow)
-            .map_err(|_| Status::invalid_argument("Invalid pubkey_to_follow format"))?;
+        let result: Result<Response<Self::ListenAsUserStream>, GatewayError> = (async {
+            let req = request.into_inner();
 
-        let user_listener: UserListener =
-            self.state.event_manager.listen_as_user(pubkey, 1024).await;
+            // Use config-driven capacities.
+            let listener_capacity = self.state.config.gateway.streaming.listener_channel_capacity;
+            let service_listener_capacity = self.state.config.gateway.streaming.service_listener_capacity;
+            let output_capacity = self.state.config.gateway.streaming.output_stream_capacity;
 
-        let (mut personal_rx, mut interactions_rx) = user_listener.into_parts();
+            let pubkey = parse_pubkey(&req.user_pubkey)?;
 
-        let (tx, rx) = tokio::sync::mpsc::channel(1024);
+            let user_listener = self.state.event_manager.listen_as_user(pubkey, listener_capacity).await;
 
-        let event_manager = self.state.event_manager.clone();
-
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    Some(event) = personal_rx.recv() => {
-                        let stream_msg = UserEventStream {
-                            event_category: Some(user_event_stream::EventCategory::PersonalEvent(event.into())),
-                        };
-                        if tx.send(Ok(stream_msg)).await.is_err() { break; }
-                    },
-                    Some(event) = interactions_rx.recv() => {
-                        let stream_msg = UserEventStream {
-                            event_category: Some(user_event_stream::EventCategory::ServiceInteractionEvent(event.into())),
-                        };
-                        if tx.send(Ok(stream_msg)).await.is_err() { break; }
-                    },
-                    else => { break; }
-                }
+            let mut specific_service_rxs = Vec::new();
+            for pda_str in req.specific_services_to_follow {
+                let pda = parse_pubkey(&pda_str)?;
+                specific_service_rxs.push(user_listener.listen_for_service(pda, service_listener_capacity));
             }
 
-            tracing::info!("Client for {} disconnected. Unsubscribing.", pubkey);
-            event_manager.unsubscribe(pubkey).await;
-        });
+            let (mut personal_rx, mut interactions_rx) = user_listener.into_parts();
+            let (tx, rx) = tokio::sync::mpsc::channel(output_capacity);
+            let event_manager = self.state.event_manager.clone();
 
-        let stream = ReceiverStream::new(rx);
-        Ok(Response::new(stream))
+            tokio::spawn(async move {
+                // Task for merging specific service listeners
+                 let (specific_tx, mut specific_rx_merged) = tokio::sync::mpsc::channel(output_capacity);
+
+            for mut service_rx in specific_service_rxs {
+                let inner_tx = specific_tx.clone();
+                tokio::spawn(async move {
+                    while let Some(event) = service_rx.recv().await {
+                        if inner_tx.send(event).await.is_err() { break; }
+                    }
+                });
+            }
+            drop(specific_tx);
+
+                loop {
+                    tokio::select! {
+                        biased;
+
+                        Some(event) = personal_rx.recv() => {
+                            let msg = UserEventStream { event_category: Some(UserEventCategory::PersonalEvent(event.into())) };
+                            if tx.send(Ok(msg)).await.is_err() { break; }
+                        },
+                        Some(event) = interactions_rx.recv() => {
+                            let msg = UserEventStream { event_category: Some(UserEventCategory::ServiceInteractionEvent(event.into())) };
+                            if tx.send(Ok(msg)).await.is_err() { break; }
+                        },
+                        Some(event) = specific_rx_merged.recv() => {
+                            let msg = UserEventStream { event_category: Some(UserEventCategory::ServiceSpecificEvent(event.into())) };
+                            if tx.send(Ok(msg)).await.is_err() { break; }
+                        },
+                        else => { break; }
+                    }
+                }
+                event_manager.unsubscribe(pubkey).await;
+            });
+
+            Ok(Response::new(ReceiverStream::new(rx)))
+        })
+        .await;
+
+        result.map_err(Status::from)
     }
 
     type ListenAsAdminStream = ReceiverStream<Result<AdminEventStream, Status>>;
 
     async fn listen_as_admin(
         &self,
-        request: Request<ListenRequest>,
+        request: Request<ListenAsAdminRequest>,
     ) -> Result<Response<Self::ListenAsAdminStream>, Status> {
-        let req = request.into_inner();
-        let pubkey = Pubkey::from_str(&req.pubkey_to_follow)
-            .map_err(|_| Status::invalid_argument("Invalid pubkey_to_follow format"))?;
+        let result: Result<Response<Self::ListenAsAdminStream>, GatewayError> = (async {
+            let req = request.into_inner();
 
-        let admin_listener: AdminListener =
-            self.state.event_manager.listen_as_admin(pubkey, 1024).await;
+            let listener_capacity = self.state.config.gateway.streaming.listener_channel_capacity;
+            let output_capacity = self.state.config.gateway.streaming.output_stream_capacity;
 
-        let (mut personal_rx, mut commands_rx, mut new_users_rx) = admin_listener.into_parts();
+            let pubkey = parse_pubkey(&req.admin_pubkey)?;
+            let admin_listener: AdminListener = self.state.event_manager.listen_as_admin(pubkey, listener_capacity).await;
 
-        let (tx, rx) = tokio::sync::mpsc::channel(1024);
+            let (mut personal_rx, mut commands_rx, mut new_users_rx) = admin_listener.into_parts();
+            let (tx, rx) = tokio::sync::mpsc::channel(output_capacity);
+            let event_manager = self.state.event_manager.clone();
 
-        let event_manager = self.state.event_manager.clone();
-
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    Some(event) = personal_rx.recv() => {
-                        // This part is simple: convert the whole enum.
-                        let stream_msg = AdminEventStream {
-                             event_category: Some(admin_event_stream::EventCategory::PersonalEvent(event.into())),
-                        };
-                        if tx.send(Ok(stream_msg)).await.is_err() { break; }
-                    },
-                    Some(event) = commands_rx.recv() => {
-
-                        let proto_event: BridgeEvent = event.into();
-
-                        if let Some(bridge_event::Event::UserCommandDispatched(proto_specific_event)) = proto_event.event {
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        Some(event) = personal_rx.recv() => {
                             let stream_msg = AdminEventStream {
-                                event_category: Some(admin_event_stream::EventCategory::IncomingUserCommand(proto_specific_event)),
+                                 event_category: Some(AdminEventCategory::PersonalEvent(event.into())),
                             };
                             if tx.send(Ok(stream_msg)).await.is_err() { break; }
-                        }
-                    },
-                    Some(event) = new_users_rx.recv() => {
-
-                        let proto_event: BridgeEvent = event.into();
-                        if let Some(bridge_event::Event::UserProfileCreated(proto_specific_event)) = proto_event.event {
-                           let stream_msg = AdminEventStream {
-                               event_category: Some(admin_event_stream::EventCategory::NewUserProfile(proto_specific_event)),
-                           };
-                           if tx.send(Ok(stream_msg)).await.is_err() { break; }
-                        }
-                    },
-                    else => { break; }
+                        },
+                        Some(event) = commands_rx.recv() => {
+                            let proto_event: BridgeEvent = event.into();
+                            if let Some(bridge_event::Event::UserCommandDispatched(proto_specific_event)) = proto_event.event {
+                                let stream_msg = AdminEventStream {
+                                    event_category: Some(AdminEventCategory::IncomingUserCommand(proto_specific_event)),
+                                };
+                                if tx.send(Ok(stream_msg)).await.is_err() { break; }
+                            }
+                        },
+                        Some(event) = new_users_rx.recv() => {
+                            let proto_event: BridgeEvent = event.into();
+                            if let Some(bridge_event::Event::UserProfileCreated(proto_specific_event)) = proto_event.event {
+                               let stream_msg = AdminEventStream {
+                                   event_category: Some(AdminEventCategory::NewUserProfile(proto_specific_event)),
+                               };
+                               if tx.send(Ok(stream_msg)).await.is_err() { break; }
+                            }
+                        },
+                        else => { break; }
+                    }
                 }
-            }
+                event_manager.unsubscribe(pubkey).await;
+            });
 
-            tracing::info!("Admin client for {} disconnected. Unsubscribing.", pubkey);
-            event_manager.unsubscribe(pubkey).await;
-        });
+            Ok(Response::new(ReceiverStream::new(rx)))
+        })
+        .await;
 
-        let stream = ReceiverStream::new(rx);
-        Ok(Response::new(stream))
+        result.map_err(Status::from)
     }
 
-    // --- Admin Method Preparations ---
+    async fn unsubscribe(
+        &self,
+        request: Request<UnsubscribeRequest>,
+    ) -> Result<Response<()>, Status> {
+        let result: Result<Response<()>, GatewayError> = (async {
+            let req = request.into_inner();
+            let pubkey = parse_pubkey(&req.pubkey_to_unsubscribe)?;
+            tracing::info!("Received explicit unsubscribe request for {}", pubkey);
+            self.state.event_manager.unsubscribe(pubkey).await;
+            Ok(Response::new(()))
+        })
+        .await;
+
+        result.map_err(Status::from)
+    }
 
     async fn prepare_admin_register_profile(
         &self,
         request: Request<PrepareAdminRegisterProfileRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
-        let req = request.into_inner();
-        let authority = Pubkey::from_str(&req.authority_pubkey)
-            .map_err(|_| Status::invalid_argument("Invalid authority_pubkey"))?;
-        let communication_pubkey = Pubkey::from_str(&req.communication_pubkey)
-            .map_err(|_| Status::invalid_argument("Invalid communication_pubkey"))?;
+        let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            let req = request.into_inner();
+            let authority = parse_pubkey(&req.authority_pubkey)?;
+            let communication_pubkey = parse_pubkey(&req.communication_pubkey)?;
 
-        let builder = TransactionBuilder::new(self.state.rpc_client.clone());
-        let transaction = builder
-            .prepare_admin_register_profile(authority, communication_pubkey)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            let builder = TransactionBuilder::new(self.state.rpc_client.clone());
+            let transaction = builder
+                .prepare_admin_register_profile(authority, communication_pubkey)
+                .await
+                .map_err(GatewayError::from)?;
 
-        let serialized_tx =
-            bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
-                .map_err(|e| Status::internal(format!("Serialization failed: {}", e)))?;
-        let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            let serialized_tx =
+                bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
+                    .map_err(GatewayError::from)?;
 
-        Ok(Response::new(UnsignedTransactionResponse {
-            unsigned_tx_base64,
-        }))
+            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+
+            Ok(Response::new(UnsignedTransactionResponse {
+                unsigned_tx_base64,
+            }))
+        })
+        .await;
+
+        result.map_err(Status::from)
     }
 
     async fn prepare_admin_update_comm_key(
         &self,
         request: Request<PrepareAdminUpdateCommKeyRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
-        let req = request.into_inner();
-        let authority = Pubkey::from_str(&req.authority_pubkey)
-            .map_err(|_| Status::invalid_argument("Invalid authority_pubkey"))?;
-        let new_key = Pubkey::from_str(&req.new_key)
-            .map_err(|_| Status::invalid_argument("Invalid new_key"))?;
+        let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            let req = request.into_inner();
+            let authority = parse_pubkey(&req.authority_pubkey)?;
+            let new_key = parse_pubkey(&req.new_key)?;
 
-        let builder = TransactionBuilder::new(self.state.rpc_client.clone());
-        let transaction = builder
-            .prepare_admin_update_comm_key(authority, new_key)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            let builder = TransactionBuilder::new(self.state.rpc_client.clone());
+            let transaction = builder
+                .prepare_admin_update_comm_key(authority, new_key)
+                .await
+                .map_err(GatewayError::from)?;
 
-        let serialized_tx =
-            bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
-                .map_err(|e| Status::internal(format!("Serialization failed: {}", e)))?;
-        let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            let serialized_tx =
+                bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
+                    .map_err(GatewayError::from)?;
 
-        Ok(Response::new(UnsignedTransactionResponse {
-            unsigned_tx_base64,
-        }))
+            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+
+            Ok(Response::new(UnsignedTransactionResponse {
+                unsigned_tx_base64,
+            }))
+        })
+        .await;
+
+        result.map_err(Status::from)
     }
 
     async fn prepare_admin_update_prices(
         &self,
         request: Request<PrepareAdminUpdatePricesRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
-        let req = request.into_inner();
-        let authority = Pubkey::from_str(&req.authority_pubkey)
-            .map_err(|_| Status::invalid_argument("Invalid authority_pubkey"))?;
+        let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            let req = request.into_inner();
+            let authority = parse_pubkey(&req.authority_pubkey)?;
 
-        let new_prices = req
-            .new_prices
-            .into_iter()
-            .map(|p| PriceEntry {
-                command_id: p.command_id as u16,
-                price: p.price,
-            })
-            .collect();
+            let new_prices = req
+                .new_prices
+                .into_iter()
+                .map(|p| PriceEntry {
+                    command_id: p.command_id as u16,
+                    price: p.price,
+                })
+                .collect::<Vec<PriceEntry>>();
 
-        let builder = TransactionBuilder::new(self.state.rpc_client.clone());
-        let transaction = builder
-            .prepare_admin_update_prices(authority, new_prices)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            let builder = TransactionBuilder::new(self.state.rpc_client.clone());
+            let transaction = builder
+                .prepare_admin_update_prices(authority, new_prices)
+                .await
+                .map_err(GatewayError::from)?;
 
-        let serialized_tx =
-            bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
-                .map_err(|e| Status::internal(format!("Serialization failed: {}", e)))?;
-        let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            let serialized_tx =
+                bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
+                    .map_err(GatewayError::from)?;
 
-        Ok(Response::new(UnsignedTransactionResponse {
-            unsigned_tx_base64,
-        }))
+            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+
+            Ok(Response::new(UnsignedTransactionResponse {
+                unsigned_tx_base64,
+            }))
+        })
+        .await;
+
+        result.map_err(Status::from)
     }
 
     async fn prepare_admin_withdraw(
         &self,
         request: Request<PrepareAdminWithdrawRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
-        let req = request.into_inner();
-        let authority = Pubkey::from_str(&req.authority_pubkey)
-            .map_err(|_| Status::invalid_argument("Invalid authority_pubkey"))?;
-        let destination = Pubkey::from_str(&req.destination)
-            .map_err(|_| Status::invalid_argument("Invalid destination"))?;
+        let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            let req = request.into_inner();
+            let authority = parse_pubkey(&req.authority_pubkey)?;
+            let destination = parse_pubkey(&req.destination)?;
 
-        let builder = TransactionBuilder::new(self.state.rpc_client.clone());
-        let transaction = builder
-            .prepare_admin_withdraw(authority, req.amount, destination)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            let builder = TransactionBuilder::new(self.state.rpc_client.clone());
+            let transaction = builder
+                .prepare_admin_withdraw(authority, req.amount, destination)
+                .await
+                .map_err(GatewayError::from)?;
 
-        let serialized_tx =
-            bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
-                .map_err(|e| Status::internal(format!("Serialization failed: {}", e)))?;
-        let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            let serialized_tx =
+                bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
+                    .map_err(GatewayError::from)?;
 
-        Ok(Response::new(UnsignedTransactionResponse {
-            unsigned_tx_base64,
-        }))
+            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+
+            Ok(Response::new(UnsignedTransactionResponse {
+                unsigned_tx_base64,
+            }))
+        })
+        .await;
+
+        result.map_err(Status::from)
     }
 
     async fn prepare_admin_close_profile(
         &self,
         request: Request<PrepareAdminCloseProfileRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
-        let req = request.into_inner();
-        let authority = Pubkey::from_str(&req.authority_pubkey)
-            .map_err(|_| Status::invalid_argument("Invalid authority_pubkey"))?;
+        let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            let req = request.into_inner();
+            let authority = parse_pubkey(&req.authority_pubkey)?;
 
-        let builder = TransactionBuilder::new(self.state.rpc_client.clone());
-        let transaction = builder
-            .prepare_admin_close_profile(authority)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            let builder = TransactionBuilder::new(self.state.rpc_client.clone());
+            let transaction = builder
+                .prepare_admin_close_profile(authority)
+                .await
+                .map_err(GatewayError::from)?;
 
-        let serialized_tx =
-            bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
-                .map_err(|e| Status::internal(format!("Serialization failed: {}", e)))?;
-        let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            let serialized_tx =
+                bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
+                    .map_err(GatewayError::from)?;
 
-        Ok(Response::new(UnsignedTransactionResponse {
-            unsigned_tx_base64,
-        }))
+            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+
+            Ok(Response::new(UnsignedTransactionResponse {
+                unsigned_tx_base64,
+            }))
+        })
+        .await;
+
+        result.map_err(Status::from)
     }
 
     async fn prepare_admin_dispatch_command(
         &self,
         request: Request<PrepareAdminDispatchCommandRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
-        let req = request.into_inner();
-        let authority = Pubkey::from_str(&req.authority_pubkey)
-            .map_err(|_| Status::invalid_argument("Invalid authority_pubkey"))?;
-        let target_user_profile_pda = Pubkey::from_str(&req.target_user_profile_pda)
-            .map_err(|_| Status::invalid_argument("Invalid target_user_profile_pda"))?;
+        let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            let req = request.into_inner();
+            let authority = parse_pubkey(&req.authority_pubkey)?;
+            let target_user_profile_pda = parse_pubkey(&req.target_user_profile_pda)?;
 
-        let builder = TransactionBuilder::new(self.state.rpc_client.clone());
-        let transaction = builder
-            .prepare_admin_dispatch_command(
-                authority,
-                target_user_profile_pda,
-                req.command_id,
-                req.payload,
-            )
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            let builder = TransactionBuilder::new(self.state.rpc_client.clone());
+            let transaction = builder
+                .prepare_admin_dispatch_command(
+                    authority,
+                    target_user_profile_pda,
+                    req.command_id,
+                    req.payload,
+                )
+                .await
+                .map_err(GatewayError::from)?;
 
-        let serialized_tx =
-            bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
-                .map_err(|e| Status::internal(format!("Serialization failed: {}", e)))?;
-        let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            let serialized_tx =
+                bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
+                    .map_err(GatewayError::from)?;
 
-        Ok(Response::new(UnsignedTransactionResponse {
-            unsigned_tx_base64,
-        }))
+            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+
+            Ok(Response::new(UnsignedTransactionResponse {
+                unsigned_tx_base64,
+            }))
+        })
+        .await;
+
+        result.map_err(Status::from)
     }
-
-    // --- User Method Preparations ---
 
     async fn prepare_user_create_profile(
         &self,
         request: Request<PrepareUserCreateProfileRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
-        let req = request.into_inner();
-        let authority = Pubkey::from_str(&req.authority_pubkey)
-            .map_err(|_| Status::invalid_argument("Invalid authority_pubkey"))?;
-        let target_admin_pda = Pubkey::from_str(&req.target_admin_pda)
-            .map_err(|_| Status::invalid_argument("Invalid target_admin_pda"))?;
-        let communication_pubkey = Pubkey::from_str(&req.communication_pubkey)
-            .map_err(|_| Status::invalid_argument("Invalid communication_pubkey"))?;
+        let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            let req = request.into_inner();
+            let authority = parse_pubkey(&req.authority_pubkey)?;
+            let target_admin_pda = parse_pubkey(&req.target_admin_pda)?;
+            let communication_pubkey = parse_pubkey(&req.communication_pubkey)?;
 
-        let builder = TransactionBuilder::new(self.state.rpc_client.clone());
-        let transaction = builder
-            .prepare_user_create_profile(authority, target_admin_pda, communication_pubkey)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            let builder = TransactionBuilder::new(self.state.rpc_client.clone());
+            let transaction = builder
+                .prepare_user_create_profile(authority, target_admin_pda, communication_pubkey)
+                .await
+                .map_err(GatewayError::from)?;
 
-        let serialized_tx =
-            bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
-                .map_err(|e| Status::internal(format!("Serialization failed: {}", e)))?;
-        let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            let serialized_tx =
+                bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
+                    .map_err(GatewayError::from)?;
 
-        Ok(Response::new(UnsignedTransactionResponse {
-            unsigned_tx_base64,
-        }))
+            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            Ok(Response::new(UnsignedTransactionResponse {
+                unsigned_tx_base64,
+            }))
+        })
+        .await;
+
+        result.map_err(Status::from)
     }
 
     async fn prepare_user_update_comm_key(
         &self,
         request: Request<PrepareUserUpdateCommKeyRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
-        let req = request.into_inner();
-        let authority = Pubkey::from_str(&req.authority_pubkey)
-            .map_err(|_| Status::invalid_argument("Invalid authority_pubkey"))?;
-        let admin_profile_pda = Pubkey::from_str(&req.admin_profile_pda)
-            .map_err(|_| Status::invalid_argument("Invalid admin_profile_pda"))?;
-        let new_key = Pubkey::from_str(&req.new_key)
-            .map_err(|_| Status::invalid_argument("Invalid new_key"))?;
+        let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            let req = request.into_inner();
+            let authority = parse_pubkey(&req.authority_pubkey)?;
+            let admin_profile_pda = parse_pubkey(&req.admin_profile_pda)?;
+            let new_key = parse_pubkey(&req.new_key)?;
 
-        let builder = TransactionBuilder::new(self.state.rpc_client.clone());
-        let transaction = builder
-            .prepare_user_update_comm_key(authority, admin_profile_pda, new_key)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            let builder = TransactionBuilder::new(self.state.rpc_client.clone());
+            let transaction = builder
+                .prepare_user_update_comm_key(authority, admin_profile_pda, new_key)
+                .await
+                .map_err(GatewayError::from)?;
 
-        let serialized_tx =
-            bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
-                .map_err(|e| Status::internal(format!("Serialization failed: {}", e)))?;
-        let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            let serialized_tx =
+                bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
+                    .map_err(GatewayError::from)?;
+            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            Ok(Response::new(UnsignedTransactionResponse {
+                unsigned_tx_base64,
+            }))
+        })
+        .await;
 
-        Ok(Response::new(UnsignedTransactionResponse {
-            unsigned_tx_base64,
-        }))
+        result.map_err(Status::from)
     }
 
     async fn prepare_user_deposit(
         &self,
         request: Request<PrepareUserDepositRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
-        let req = request.into_inner();
-        let authority = Pubkey::from_str(&req.authority_pubkey)
-            .map_err(|_| Status::invalid_argument("Invalid authority_pubkey"))?;
-        let admin_profile_pda = Pubkey::from_str(&req.admin_profile_pda)
-            .map_err(|_| Status::invalid_argument("Invalid admin_profile_pda"))?;
+        let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            let req = request.into_inner();
+            let authority = parse_pubkey(&req.authority_pubkey)?;
+            let admin_profile_pda = parse_pubkey(&req.admin_profile_pda)?;
 
-        let builder = TransactionBuilder::new(self.state.rpc_client.clone());
-        let transaction = builder
-            .prepare_user_deposit(authority, admin_profile_pda, req.amount)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            let builder = TransactionBuilder::new(self.state.rpc_client.clone());
+            let transaction = builder
+                .prepare_user_deposit(authority, admin_profile_pda, req.amount)
+                .await
+                .map_err(GatewayError::from)?;
 
-        let serialized_tx =
-            bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
-                .map_err(|e| Status::internal(format!("Serialization failed: {}", e)))?;
-        let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            let serialized_tx =
+                bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
+                    .map_err(GatewayError::from)?;
+            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            Ok(Response::new(UnsignedTransactionResponse {
+                unsigned_tx_base64,
+            }))
+        })
+        .await;
 
-        Ok(Response::new(UnsignedTransactionResponse {
-            unsigned_tx_base64,
-        }))
+        result.map_err(Status::from)
     }
 
     async fn prepare_user_withdraw(
         &self,
         request: Request<PrepareUserWithdrawRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
-        let req = request.into_inner();
-        let authority = Pubkey::from_str(&req.authority_pubkey)
-            .map_err(|_| Status::invalid_argument("Invalid authority_pubkey"))?;
-        let admin_profile_pda = Pubkey::from_str(&req.admin_profile_pda)
-            .map_err(|_| Status::invalid_argument("Invalid admin_profile_pda"))?;
-        let destination = Pubkey::from_str(&req.destination)
-            .map_err(|_| Status::invalid_argument("Invalid destination"))?;
+        let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            let req = request.into_inner();
+            let authority = parse_pubkey(&req.authority_pubkey)?;
+            let admin_profile_pda = parse_pubkey(&req.admin_profile_pda)?;
+            let destination = parse_pubkey(&req.destination)?;
 
-        let builder = TransactionBuilder::new(self.state.rpc_client.clone());
-        let transaction = builder
-            .prepare_user_withdraw(authority, admin_profile_pda, req.amount, destination)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            let builder = TransactionBuilder::new(self.state.rpc_client.clone());
+            let transaction = builder
+                .prepare_user_withdraw(authority, admin_profile_pda, req.amount, destination)
+                .await
+                .map_err(GatewayError::from)?;
 
-        let serialized_tx =
-            bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
-                .map_err(|e| Status::internal(format!("Serialization failed: {}", e)))?;
-        let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            let serialized_tx =
+                bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
+                    .map_err(GatewayError::from)?;
+            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            Ok(Response::new(UnsignedTransactionResponse {
+                unsigned_tx_base64,
+            }))
+        })
+        .await;
 
-        Ok(Response::new(UnsignedTransactionResponse {
-            unsigned_tx_base64,
-        }))
+        result.map_err(Status::from)
     }
 
     async fn prepare_user_close_profile(
         &self,
         request: Request<PrepareUserCloseProfileRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
-        let req = request.into_inner();
-        let authority = Pubkey::from_str(&req.authority_pubkey)
-            .map_err(|_| Status::invalid_argument("Invalid authority_pubkey"))?;
-        let admin_profile_pda = Pubkey::from_str(&req.admin_profile_pda)
-            .map_err(|_| Status::invalid_argument("Invalid admin_profile_pda"))?;
+        let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            let req = request.into_inner();
+            let authority = parse_pubkey(&req.authority_pubkey)?;
+            let admin_profile_pda = parse_pubkey(&req.admin_profile_pda)?;
 
-        let builder = TransactionBuilder::new(self.state.rpc_client.clone());
-        let transaction = builder
-            .prepare_user_close_profile(authority, admin_profile_pda)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            let builder = TransactionBuilder::new(self.state.rpc_client.clone());
+            let transaction = builder
+                .prepare_user_close_profile(authority, admin_profile_pda)
+                .await
+                .map_err(GatewayError::from)?;
 
-        let serialized_tx =
-            bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
-                .map_err(|e| Status::internal(format!("Serialization failed: {}", e)))?;
-        let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            let serialized_tx =
+                bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
+                    .map_err(GatewayError::from)?;
+            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            Ok(Response::new(UnsignedTransactionResponse {
+                unsigned_tx_base64,
+            }))
+        })
+        .await;
 
-        Ok(Response::new(UnsignedTransactionResponse {
-            unsigned_tx_base64,
-        }))
+        result.map_err(Status::from)
     }
 
     async fn prepare_user_dispatch_command(
         &self,
         request: Request<PrepareUserDispatchCommandRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
-        let req = request.into_inner();
-        let authority = Pubkey::from_str(&req.authority_pubkey)
-            .map_err(|_| Status::invalid_argument("Invalid authority_pubkey"))?;
-        let admin_profile_pda = Pubkey::from_str(&req.admin_profile_pda)
-            .map_err(|_| Status::invalid_argument("Invalid admin_profile_pda"))?;
+        let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            let req = request.into_inner();
+            let authority = parse_pubkey(&req.authority_pubkey)?;
+            let admin_profile_pda = parse_pubkey(&req.admin_profile_pda)?;
 
-        let builder = TransactionBuilder::new(self.state.rpc_client.clone());
-        let transaction = builder
-            .prepare_user_dispatch_command(
-                authority,
-                admin_profile_pda,
-                req.command_id as u16,
-                req.payload,
-            )
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            let builder = TransactionBuilder::new(self.state.rpc_client.clone());
+            let transaction = builder
+                .prepare_user_dispatch_command(
+                    authority,
+                    admin_profile_pda,
+                    req.command_id as u16,
+                    req.payload,
+                )
+                .await
+                .map_err(GatewayError::from)?;
 
-        let serialized_tx =
-            bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
-                .map_err(|e| Status::internal(format!("Serialization failed: {}", e)))?;
-        let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            let serialized_tx =
+                bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
+                    .map_err(GatewayError::from)?;
+            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            Ok(Response::new(UnsignedTransactionResponse {
+                unsigned_tx_base64,
+            }))
+        })
+        .await;
 
-        Ok(Response::new(UnsignedTransactionResponse {
-            unsigned_tx_base64,
-        }))
+        result.map_err(Status::from)
     }
-
-    // --- Operational Method Preparations ---
 
     async fn prepare_log_action(
         &self,
         request: Request<PrepareLogActionRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
-        let req = request.into_inner();
-        let authority = Pubkey::from_str(&req.authority_pubkey)
-            .map_err(|_| Status::invalid_argument("Invalid authority_pubkey"))?;
+        let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            let req = request.into_inner();
+            let authority = parse_pubkey(&req.authority_pubkey)?;
 
-        let builder = TransactionBuilder::new(self.state.rpc_client.clone());
-        let transaction = builder
-            .prepare_log_action(authority, req.session_id, req.action_code as u16)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            let builder = TransactionBuilder::new(self.state.rpc_client.clone());
+            let transaction = builder
+                .prepare_log_action(authority, req.session_id, req.action_code as u16)
+                .await
+                .map_err(GatewayError::from)?;
 
-        let serialized_tx =
-            bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
-                .map_err(|e| Status::internal(format!("Serialization failed: {}", e)))?;
-        let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            let serialized_tx =
+                bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
+                    .map_err(GatewayError::from)?;
+            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            Ok(Response::new(UnsignedTransactionResponse {
+                unsigned_tx_base64,
+            }))
+        })
+        .await;
 
-        Ok(Response::new(UnsignedTransactionResponse {
-            unsigned_tx_base64,
-        }))
+        result.map_err(Status::from)
     }
 
-    // --- Transaction Submission ---
-
-    /// Receives a transaction signed by a client and submits it to the Solana network.
     async fn submit_transaction(
         &self,
         request: Request<SubmitTransactionRequest>,
     ) -> Result<Response<TransactionResponse>, Status> {
-        let req = request.into_inner();
+        let result: Result<Response<TransactionResponse>, GatewayError> = (async {
+            let req = request.into_inner();
 
-        let tx_bytes = general_purpose::STANDARD
-            .decode(&req.signed_tx_base64)
-            .map_err(|e| {
-                Status::invalid_argument(format!("Invalid base64 for transaction: {}", e))
-            })?;
+            let tx_bytes = general_purpose::STANDARD
+                .decode(&req.signed_tx_base64)
+                .map_err(GatewayError::from)?;
 
-        let (transaction, _len): (Transaction, usize) =
-            bincode::serde::borrow_decode_from_slice(&tx_bytes, bincode::config::standard())
-                .map_err(|e| {
-                    Status::invalid_argument(format!("Failed to deserialize transaction: {}", e))
-                })?;
+            let (transaction, _len): (Transaction, usize) =
+                bincode::serde::borrow_decode_from_slice(&tx_bytes, bincode::config::standard())
+                    .map_err(GatewayError::from)?;
 
-        let builder = TransactionBuilder::new(self.state.rpc_client.clone());
-        let signature = builder
-            .submit_transaction(&transaction)
-            .await
-            .map_err(|e| Status::internal(format!("Failed to send transaction: {}", e)))?;
+            let builder = TransactionBuilder::new(self.state.rpc_client.clone());
+            let signature = builder
+                .submit_transaction(&transaction)
+                .await
+                .map_err(GatewayError::from)?;
 
-        Ok(Response::new(TransactionResponse {
-            signature: signature.to_string(),
-        }))
+            Ok(Response::new(TransactionResponse {
+                signature: signature.to_string(),
+            }))
+        })
+        .await;
+
+        result.map_err(Status::from)
     }
 }
-
-// /// The main entry point to start the gRPC server.
-// pub async fn start(config: &config::GatewayConfig) -> Result<()> {
-//     let addr = format!("{}:{}", config.gateway.grpc.host, config.gateway.grpc.port).parse()?;
-
-//     // Create a single, shared RpcClient instance.
-//     let rpc_client = Arc::new(RpcClient::new(config.connector.solana.rpc_url.clone()));
-
-//     // --- NEW: Initialize EventManager and its background tasks ---
-//     // Note: The storage dependency needs to be created here.
-//     // For now, let's assume a simple in-memory or sled-based storage.
-//     // let storage = Arc::new(SledStorage::new(...)); // You need to initialize this
-//     let event_manager = Arc::new(EventManager::new(
-//         Arc::new(config.connector.clone()),
-//         rpc_client.clone(),
-//         storage, // Pass the storage implementation
-//         1024,
-//         128,
-//     ));
-
-//     // Spawn the EventManager's background services (Synchronizer and Dispatcher)
-//     let em_clone = event_manager.clone();
-//     tokio::spawn(async move {
-//         em_clone.run().await;
-//     });
-//     // --- END NEW ---
-
-//     // The AppState now holds the EventManager instance.
-//     let app_state = AppState {
-//         rpc_client,
-//         event_manager,
-//     };
-
-//     // Instantiate the server.
-//     let gateway_server = GatewayServer::new(app_state);
-
-//     tracing::info!(
-//         "Non-Custodial gRPC Gateway with Event Streaming listening on {}",
-//         addr
-//     );
-
-//     // Build and run the Tonic server with our single service.
-//     Server::builder()
-//         .add_service(BridgeGatewayServiceServer::new(gateway_server))
-//         .serve(addr)
-//         .await?;
-
-//     Ok(())
-// }

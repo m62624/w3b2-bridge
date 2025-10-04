@@ -19,7 +19,7 @@ impl LiveWorker {
     }
 
     /// Subscribes to new logs via WebSocket and processes them in real-time.
-    pub async fn run(&self) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
         let client = PubsubClient::new(&self.ctx.config.solana.ws_url).await?;
 
         let (mut stream, _) = client

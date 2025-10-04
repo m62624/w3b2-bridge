@@ -87,20 +87,47 @@ message PrepareLogActionRequest {
 
 // --- Messages for Event Streaming ---
 
-message ListenRequest { string pubkey_to_follow = 1; }
+// A request to start listening for user events.
+message ListenAsUserRequest {
+  // The user's public key to monitor.
+  string user_pubkey = 1;
+  // Optional: A list of specific service admin PDAs to create
+  // dedicated, filtered streams for.
+  repeated string specific_services_to_follow = 2;
+}
 
+// A request to start listening for admin events.
+message ListenAsAdminRequest {
+  // The admin's public key to monitor.
+  string admin_pubkey = 1;
+}
+
+message UnsubscribeRequest {
+  // The public key of the listener to unregister.
+  string pubkey_to_unsubscribe = 1;
+}
+
+// A wrapper for events streamed to a User.
 message UserEventStream {
   oneof event_category {
+    // An event related to the user's own profile and funds.
     BridgeEvent personal_event = 1;
+    // An event representing an interaction with ANY service.
     BridgeEvent service_interaction_event = 2;
+    // An event that came from a specific, filtered service stream.
+    BridgeEvent service_specific_event = 3;
   }
 }
 
+// A wrapper for events streamed to an Admin.
 message AdminEventStream {
   oneof event_category {
+    // An event related to the admin's own profile.
     BridgeEvent personal_event = 1;
-    UserCommandDispatched incoming_user_command = 2;
-    UserProfileCreated new_user_profile = 3;
+    // A new user has created a profile for this admin's service.
+    UserProfileCreated new_user_profile = 2;
+    // A command dispatched by a user to this admin.
+    UserCommandDispatched incoming_user_command = 3;
   }
 }
 
