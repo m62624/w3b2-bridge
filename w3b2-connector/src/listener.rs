@@ -167,6 +167,14 @@ impl UserListener {
         rx
     }
 
+    /// Stops forwarding events for a specific service/admin.
+    ///
+    /// This removes the listener from the internal map. The corresponding `Receiver`
+    /// on the client side will eventually close as no new messages will be sent.
+    pub fn stop_listening_for_service(&self, target_admin_pda: Pubkey) {
+        self.service_listeners.remove(&target_admin_pda);
+    }
+
     /// Consumes the listener and returns its underlying receiver channels.
     /// This is useful for moving the channels into separate tasks, like in `tokio::select!`.
     pub fn into_parts(self) -> (mpsc::Receiver<BridgeEvent>, mpsc::Receiver<BridgeEvent>) {
