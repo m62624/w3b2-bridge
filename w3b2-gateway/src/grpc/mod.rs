@@ -131,6 +131,11 @@ impl BridgeGatewayService for GatewayServer {
         request: Request<ListenAsUserRequest>,
     ) -> Result<Response<Self::ListenAsUserStream>, Status> {
         let result: Result<Response<Self::ListenAsUserStream>, GatewayError> = (async {
+            tracing::info!(
+                "Received ListenAsUser request: {:?}",
+                request.get_ref()
+            );
+
             let req = request.into_inner();
 
             // Use config-driven capacities.
@@ -140,11 +145,13 @@ impl BridgeGatewayService for GatewayServer {
 
             let pubkey = parse_pubkey(&req.user_pubkey)?;
 
+            tracing::debug!("Creating user listener for pubkey: {}", pubkey);
             let user_listener = self.state.event_manager.listen_as_user(pubkey, listener_capacity).await;
 
             let mut specific_service_rxs = Vec::new();
             for pda_str in req.specific_services_to_follow {
                 let pda = parse_pubkey(&pda_str)?;
+                tracing::debug!("Subscribing user {} to specific service PDA: {}", pubkey, pda);
                 specific_service_rxs.push(user_listener.listen_for_service(pda, service_listener_capacity));
             }
 
@@ -172,14 +179,17 @@ impl BridgeGatewayService for GatewayServer {
 
                         Some(event) = personal_rx.recv() => {
                             let msg = UserEventStream { event_category: Some(UserEventCategory::PersonalEvent(event.into())) };
+                            tracing::debug!("Forwarding personal event to user {}: {:?}", pubkey, msg);
                             if tx.send(Ok(msg)).await.is_err() { break; }
                         },
                         Some(event) = interactions_rx.recv() => {
                             let msg = UserEventStream { event_category: Some(UserEventCategory::ServiceInteractionEvent(event.into())) };
+                            tracing::debug!("Forwarding service interaction event to user {}: {:?}", pubkey, msg);
                             if tx.send(Ok(msg)).await.is_err() { break; }
                         },
                         Some(event) = specific_rx_merged.recv() => {
                             let msg = UserEventStream { event_category: Some(UserEventCategory::ServiceSpecificEvent(event.into())) };
+                            tracing::debug!("Forwarding service-specific event to user {}: {:?}", pubkey, msg);
                             if tx.send(Ok(msg)).await.is_err() { break; }
                         },
                         else => { break; }
@@ -202,6 +212,11 @@ impl BridgeGatewayService for GatewayServer {
         request: Request<ListenAsAdminRequest>,
     ) -> Result<Response<Self::ListenAsAdminStream>, Status> {
         let result: Result<Response<Self::ListenAsAdminStream>, GatewayError> = (async {
+            tracing::info!(
+                "Received ListenAsAdmin request: {:?}",
+                request.get_ref()
+            );
+
             let req = request.into_inner();
 
             let listener_capacity = self.state.config.gateway.streaming.listener_channel_capacity;
@@ -209,6 +224,7 @@ impl BridgeGatewayService for GatewayServer {
 
             let pubkey = parse_pubkey(&req.admin_pubkey)?;
             let admin_listener: AdminListener = self.state.event_manager.listen_as_admin(pubkey, listener_capacity).await;
+            tracing::debug!("Created admin listener for pubkey: {}", pubkey);
 
             let (mut personal_rx, mut commands_rx, mut new_users_rx) = admin_listener.into_parts();
             let (tx, rx) = tokio::sync::mpsc::channel(output_capacity);
@@ -221,6 +237,7 @@ impl BridgeGatewayService for GatewayServer {
                             let stream_msg = AdminEventStream {
                                  event_category: Some(AdminEventCategory::PersonalEvent(event.into())),
                             };
+                            tracing::debug!("Forwarding personal event to admin {}: {:?}", pubkey, stream_msg);
                             if tx.send(Ok(stream_msg)).await.is_err() { break; }
                         },
                         Some(event) = commands_rx.recv() => {
@@ -229,6 +246,7 @@ impl BridgeGatewayService for GatewayServer {
                                 let stream_msg = AdminEventStream {
                                     event_category: Some(AdminEventCategory::IncomingUserCommand(proto_specific_event)),
                                 };
+                                tracing::debug!("Forwarding incoming user command to admin {}: {:?}", pubkey, stream_msg);
                                 if tx.send(Ok(stream_msg)).await.is_err() { break; }
                             }
                         },
@@ -238,6 +256,7 @@ impl BridgeGatewayService for GatewayServer {
                                let stream_msg = AdminEventStream {
                                    event_category: Some(AdminEventCategory::NewUserProfile(proto_specific_event)),
                                };
+                               tracing::debug!("Forwarding new user profile event to admin {}: {:?}", pubkey, stream_msg);
                                if tx.send(Ok(stream_msg)).await.is_err() { break; }
                             }
                         },
@@ -259,6 +278,8 @@ impl BridgeGatewayService for GatewayServer {
         request: Request<UnsubscribeRequest>,
     ) -> Result<Response<()>, Status> {
         let result: Result<Response<()>, GatewayError> = (async {
+            tracing::info!("Received Unsubscribe request: {:?}", request.get_ref());
+
             let req = request.into_inner();
             let pubkey = parse_pubkey(&req.pubkey_to_unsubscribe)?;
             tracing::info!("Received explicit unsubscribe request for {}", pubkey);
@@ -275,6 +296,11 @@ impl BridgeGatewayService for GatewayServer {
         request: Request<PrepareAdminRegisterProfileRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
         let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            tracing::info!(
+                "Received PrepareAdminRegisterProfile request: {:?}",
+                request.get_ref()
+            );
+
             let req = request.into_inner();
             let authority = parse_pubkey(&req.authority_pubkey)?;
             let communication_pubkey = parse_pubkey(&req.communication_pubkey)?;
@@ -290,6 +316,10 @@ impl BridgeGatewayService for GatewayServer {
                     .map_err(GatewayError::from)?;
 
             let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            tracing::debug!(
+                "Prepared admin_register_profile tx for authority {}",
+                authority
+            );
 
             Ok(Response::new(UnsignedTransactionResponse {
                 unsigned_tx_base64,
@@ -305,6 +335,11 @@ impl BridgeGatewayService for GatewayServer {
         request: Request<PrepareAdminUpdateCommKeyRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
         let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            tracing::info!(
+                "Received PrepareAdminUpdateCommKey request: {:?}",
+                request.get_ref()
+            );
+
             let req = request.into_inner();
             let authority = parse_pubkey(&req.authority_pubkey)?;
             let new_key = parse_pubkey(&req.new_key)?;
@@ -320,6 +355,10 @@ impl BridgeGatewayService for GatewayServer {
                     .map_err(GatewayError::from)?;
 
             let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            tracing::debug!(
+                "Prepared admin_update_comm_key tx for authority {}",
+                authority
+            );
 
             Ok(Response::new(UnsignedTransactionResponse {
                 unsigned_tx_base64,
@@ -335,6 +374,11 @@ impl BridgeGatewayService for GatewayServer {
         request: Request<PrepareAdminUpdatePricesRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
         let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            tracing::info!(
+                "Received PrepareAdminUpdatePrices request: {:?}",
+                request.get_ref()
+            );
+
             let req = request.into_inner();
             let authority = parse_pubkey(&req.authority_pubkey)?;
 
@@ -358,6 +402,10 @@ impl BridgeGatewayService for GatewayServer {
                     .map_err(GatewayError::from)?;
 
             let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            tracing::debug!(
+                "Prepared admin_update_prices tx for authority {}",
+                authority
+            );
 
             Ok(Response::new(UnsignedTransactionResponse {
                 unsigned_tx_base64,
@@ -373,6 +421,11 @@ impl BridgeGatewayService for GatewayServer {
         request: Request<PrepareAdminWithdrawRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
         let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            tracing::info!(
+                "Received PrepareAdminWithdraw request: {:?}",
+                request.get_ref()
+            );
+
             let req = request.into_inner();
             let authority = parse_pubkey(&req.authority_pubkey)?;
             let destination = parse_pubkey(&req.destination)?;
@@ -388,6 +441,7 @@ impl BridgeGatewayService for GatewayServer {
                     .map_err(GatewayError::from)?;
 
             let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            tracing::debug!("Prepared admin_withdraw tx for authority {}", authority);
 
             Ok(Response::new(UnsignedTransactionResponse {
                 unsigned_tx_base64,
@@ -403,6 +457,11 @@ impl BridgeGatewayService for GatewayServer {
         request: Request<PrepareAdminCloseProfileRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
         let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            tracing::info!(
+                "Received PrepareAdminCloseProfile request: {:?}",
+                request.get_ref()
+            );
+
             let req = request.into_inner();
             let authority = parse_pubkey(&req.authority_pubkey)?;
 
@@ -417,6 +476,10 @@ impl BridgeGatewayService for GatewayServer {
                     .map_err(GatewayError::from)?;
 
             let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            tracing::debug!(
+                "Prepared admin_close_profile tx for authority {}",
+                authority
+            );
 
             Ok(Response::new(UnsignedTransactionResponse {
                 unsigned_tx_base64,
@@ -432,6 +495,11 @@ impl BridgeGatewayService for GatewayServer {
         request: Request<PrepareAdminDispatchCommandRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
         let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            tracing::info!(
+                "Received PrepareAdminDispatchCommand request: {:?}",
+                request.get_ref()
+            );
+
             let req = request.into_inner();
             let authority = parse_pubkey(&req.authority_pubkey)?;
             let target_user_profile_pda = parse_pubkey(&req.target_user_profile_pda)?;
@@ -452,6 +520,10 @@ impl BridgeGatewayService for GatewayServer {
                     .map_err(GatewayError::from)?;
 
             let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            tracing::debug!(
+                "Prepared admin_dispatch_command tx for authority {}",
+                authority
+            );
 
             Ok(Response::new(UnsignedTransactionResponse {
                 unsigned_tx_base64,
@@ -467,6 +539,11 @@ impl BridgeGatewayService for GatewayServer {
         request: Request<PrepareUserCreateProfileRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
         let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            tracing::info!(
+                "Received PrepareUserCreateProfile request: {:?}",
+                request.get_ref()
+            );
+
             let req = request.into_inner();
             let authority = parse_pubkey(&req.authority_pubkey)?;
             let target_admin_pda = parse_pubkey(&req.target_admin_pda)?;
@@ -483,6 +560,10 @@ impl BridgeGatewayService for GatewayServer {
                     .map_err(GatewayError::from)?;
 
             let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            tracing::debug!(
+                "Prepared user_create_profile tx for authority {}",
+                authority
+            );
             Ok(Response::new(UnsignedTransactionResponse {
                 unsigned_tx_base64,
             }))
@@ -497,6 +578,11 @@ impl BridgeGatewayService for GatewayServer {
         request: Request<PrepareUserUpdateCommKeyRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
         let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            tracing::info!(
+                "Received PrepareUserUpdateCommKey request: {:?}",
+                request.get_ref()
+            );
+
             let req = request.into_inner();
             let authority = parse_pubkey(&req.authority_pubkey)?;
             let admin_profile_pda = parse_pubkey(&req.admin_profile_pda)?;
@@ -512,6 +598,10 @@ impl BridgeGatewayService for GatewayServer {
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
             let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            tracing::debug!(
+                "Prepared user_update_comm_key tx for authority {}",
+                authority
+            );
             Ok(Response::new(UnsignedTransactionResponse {
                 unsigned_tx_base64,
             }))
@@ -526,6 +616,11 @@ impl BridgeGatewayService for GatewayServer {
         request: Request<PrepareUserDepositRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
         let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            tracing::info!(
+                "Received PrepareUserDeposit request: {:?}",
+                request.get_ref()
+            );
+
             let req = request.into_inner();
             let authority = parse_pubkey(&req.authority_pubkey)?;
             let admin_profile_pda = parse_pubkey(&req.admin_profile_pda)?;
@@ -540,6 +635,7 @@ impl BridgeGatewayService for GatewayServer {
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
             let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            tracing::debug!("Prepared user_deposit tx for authority {}", authority);
             Ok(Response::new(UnsignedTransactionResponse {
                 unsigned_tx_base64,
             }))
@@ -554,6 +650,11 @@ impl BridgeGatewayService for GatewayServer {
         request: Request<PrepareUserWithdrawRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
         let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            tracing::info!(
+                "Received PrepareUserWithdraw request: {:?}",
+                request.get_ref()
+            );
+
             let req = request.into_inner();
             let authority = parse_pubkey(&req.authority_pubkey)?;
             let admin_profile_pda = parse_pubkey(&req.admin_profile_pda)?;
@@ -569,6 +670,7 @@ impl BridgeGatewayService for GatewayServer {
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
             let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            tracing::debug!("Prepared user_withdraw tx for authority {}", authority);
             Ok(Response::new(UnsignedTransactionResponse {
                 unsigned_tx_base64,
             }))
@@ -583,6 +685,11 @@ impl BridgeGatewayService for GatewayServer {
         request: Request<PrepareUserCloseProfileRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
         let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            tracing::info!(
+                "Received PrepareUserCloseProfile request: {:?}",
+                request.get_ref()
+            );
+
             let req = request.into_inner();
             let authority = parse_pubkey(&req.authority_pubkey)?;
             let admin_profile_pda = parse_pubkey(&req.admin_profile_pda)?;
@@ -597,6 +704,7 @@ impl BridgeGatewayService for GatewayServer {
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
             let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            tracing::debug!("Prepared user_close_profile tx for authority {}", authority);
             Ok(Response::new(UnsignedTransactionResponse {
                 unsigned_tx_base64,
             }))
@@ -611,6 +719,11 @@ impl BridgeGatewayService for GatewayServer {
         request: Request<PrepareUserDispatchCommandRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
         let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            tracing::info!(
+                "Received PrepareUserDispatchCommand request: {:?}",
+                request.get_ref()
+            );
+
             let req = request.into_inner();
             let authority = parse_pubkey(&req.authority_pubkey)?;
             let admin_profile_pda = parse_pubkey(&req.admin_profile_pda)?;
@@ -630,6 +743,10 @@ impl BridgeGatewayService for GatewayServer {
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
             let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            tracing::debug!(
+                "Prepared user_dispatch_command tx for authority {}",
+                authority
+            );
             Ok(Response::new(UnsignedTransactionResponse {
                 unsigned_tx_base64,
             }))
@@ -644,6 +761,8 @@ impl BridgeGatewayService for GatewayServer {
         request: Request<PrepareLogActionRequest>,
     ) -> Result<Response<UnsignedTransactionResponse>, Status> {
         let result: Result<Response<UnsignedTransactionResponse>, GatewayError> = (async {
+            tracing::info!("Received PrepareLogAction request: {:?}", request.get_ref());
+
             let req = request.into_inner();
             let authority = parse_pubkey(&req.authority_pubkey)?;
 
@@ -657,6 +776,7 @@ impl BridgeGatewayService for GatewayServer {
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
             let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
+            tracing::debug!("Prepared log_action tx for authority {}", authority);
             Ok(Response::new(UnsignedTransactionResponse {
                 unsigned_tx_base64,
             }))
@@ -671,6 +791,16 @@ impl BridgeGatewayService for GatewayServer {
         request: Request<SubmitTransactionRequest>,
     ) -> Result<Response<TransactionResponse>, Status> {
         let result: Result<Response<TransactionResponse>, GatewayError> = (async {
+            tracing::info!(
+                "Received SubmitTransaction request for tx starting with: {}",
+                &request
+                    .get_ref()
+                    .signed_tx_base64
+                    .chars()
+                    .take(20)
+                    .collect::<String>()
+            );
+
             let req = request.into_inner();
 
             let tx_bytes = general_purpose::STANDARD
@@ -680,12 +810,14 @@ impl BridgeGatewayService for GatewayServer {
             let (transaction, _len): (Transaction, usize) =
                 bincode::serde::borrow_decode_from_slice(&tx_bytes, bincode::config::standard())
                     .map_err(GatewayError::from)?;
+            tracing::debug!("Deserialized transaction: {:?}", transaction);
 
             let builder = TransactionBuilder::new(self.state.rpc_client.clone());
             let signature = builder
                 .submit_transaction(&transaction)
                 .await
                 .map_err(GatewayError::from)?;
+            tracing::info!("Submitted transaction, signature: {}", signature);
 
             Ok(Response::new(TransactionResponse {
                 signature: signature.to_string(),
