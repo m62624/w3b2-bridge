@@ -16,9 +16,9 @@ message PriceEntry {
 
 // --- Core RPC Message Types for Transactions ---
 
-message UnsignedTransactionResponse { string unsigned_tx_base64 = 1; }
+message UnsignedTransactionResponse { bytes unsigned_tx = 1; }
 
-message SubmitTransactionRequest { string signed_tx_base64 = 1; }
+message SubmitTransactionRequest { bytes signed_tx = 1; }
 
 message TransactionResponse { string signature = 1; }
 

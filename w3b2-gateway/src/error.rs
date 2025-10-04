@@ -17,9 +17,6 @@ pub enum GatewayError {
 
     #[error("Deserialization failed: {0}")]
     Deserialization(#[from] bincode::error::DecodeError),
-
-    #[error("Invalid Base64: {0}")]
-    Base64(#[from] base64::DecodeError),
 }
 
 /// Allows automatic conversion from our custom `GatewayError` into a `tonic::Status`.
@@ -36,9 +33,6 @@ impl From<GatewayError> for Status {
             }
             GatewayError::Deserialization(e) => {
                 Status::invalid_argument(format!("Invalid data format for deserialization: {}", e))
-            }
-            GatewayError::Base64(e) => {
-                Status::invalid_argument(format!("Invalid Base64 encoding: {}", e))
             }
         }
     }

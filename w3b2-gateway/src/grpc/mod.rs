@@ -13,8 +13,6 @@ use w3b2_connector::{
     workers::{EventManager, EventManagerHandle},
 };
 
-use base64::{Engine as _, engine::general_purpose};
-
 use crate::{
     config::GatewayConfig,
     error::GatewayError,
@@ -311,19 +309,15 @@ impl BridgeGatewayService for GatewayServer {
                 .await
                 .map_err(GatewayError::from)?;
 
-            let serialized_tx =
+            let unsigned_tx =
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
-
-            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
             tracing::debug!(
                 "Prepared admin_register_profile tx for authority {}",
                 authority
             );
 
-            Ok(Response::new(UnsignedTransactionResponse {
-                unsigned_tx_base64,
-            }))
+            Ok(Response::new(UnsignedTransactionResponse { unsigned_tx }))
         })
         .await;
 
@@ -350,19 +344,15 @@ impl BridgeGatewayService for GatewayServer {
                 .await
                 .map_err(GatewayError::from)?;
 
-            let serialized_tx =
+            let unsigned_tx =
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
-
-            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
             tracing::debug!(
                 "Prepared admin_update_comm_key tx for authority {}",
                 authority
             );
 
-            Ok(Response::new(UnsignedTransactionResponse {
-                unsigned_tx_base64,
-            }))
+            Ok(Response::new(UnsignedTransactionResponse { unsigned_tx }))
         })
         .await;
 
@@ -397,19 +387,15 @@ impl BridgeGatewayService for GatewayServer {
                 .await
                 .map_err(GatewayError::from)?;
 
-            let serialized_tx =
+            let unsigned_tx =
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
-
-            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
             tracing::debug!(
                 "Prepared admin_update_prices tx for authority {}",
                 authority
             );
 
-            Ok(Response::new(UnsignedTransactionResponse {
-                unsigned_tx_base64,
-            }))
+            Ok(Response::new(UnsignedTransactionResponse { unsigned_tx }))
         })
         .await;
 
@@ -436,16 +422,12 @@ impl BridgeGatewayService for GatewayServer {
                 .await
                 .map_err(GatewayError::from)?;
 
-            let serialized_tx =
+            let unsigned_tx =
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
-
-            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
             tracing::debug!("Prepared admin_withdraw tx for authority {}", authority);
 
-            Ok(Response::new(UnsignedTransactionResponse {
-                unsigned_tx_base64,
-            }))
+            Ok(Response::new(UnsignedTransactionResponse { unsigned_tx }))
         })
         .await;
 
@@ -471,19 +453,15 @@ impl BridgeGatewayService for GatewayServer {
                 .await
                 .map_err(GatewayError::from)?;
 
-            let serialized_tx =
+            let unsigned_tx =
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
-
-            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
             tracing::debug!(
                 "Prepared admin_close_profile tx for authority {}",
                 authority
             );
 
-            Ok(Response::new(UnsignedTransactionResponse {
-                unsigned_tx_base64,
-            }))
+            Ok(Response::new(UnsignedTransactionResponse { unsigned_tx }))
         })
         .await;
 
@@ -515,19 +493,15 @@ impl BridgeGatewayService for GatewayServer {
                 .await
                 .map_err(GatewayError::from)?;
 
-            let serialized_tx =
+            let unsigned_tx =
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
-
-            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
             tracing::debug!(
                 "Prepared admin_dispatch_command tx for authority {}",
                 authority
             );
 
-            Ok(Response::new(UnsignedTransactionResponse {
-                unsigned_tx_base64,
-            }))
+            Ok(Response::new(UnsignedTransactionResponse { unsigned_tx }))
         })
         .await;
 
@@ -555,18 +529,14 @@ impl BridgeGatewayService for GatewayServer {
                 .await
                 .map_err(GatewayError::from)?;
 
-            let serialized_tx =
+            let unsigned_tx =
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
-
-            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
             tracing::debug!(
                 "Prepared user_create_profile tx for authority {}",
                 authority
             );
-            Ok(Response::new(UnsignedTransactionResponse {
-                unsigned_tx_base64,
-            }))
+            Ok(Response::new(UnsignedTransactionResponse { unsigned_tx }))
         })
         .await;
 
@@ -594,17 +564,14 @@ impl BridgeGatewayService for GatewayServer {
                 .await
                 .map_err(GatewayError::from)?;
 
-            let serialized_tx =
+            let unsigned_tx =
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
-            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
             tracing::debug!(
                 "Prepared user_update_comm_key tx for authority {}",
                 authority
             );
-            Ok(Response::new(UnsignedTransactionResponse {
-                unsigned_tx_base64,
-            }))
+            Ok(Response::new(UnsignedTransactionResponse { unsigned_tx }))
         })
         .await;
 
@@ -631,14 +598,11 @@ impl BridgeGatewayService for GatewayServer {
                 .await
                 .map_err(GatewayError::from)?;
 
-            let serialized_tx =
+            let unsigned_tx =
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
-            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
             tracing::debug!("Prepared user_deposit tx for authority {}", authority);
-            Ok(Response::new(UnsignedTransactionResponse {
-                unsigned_tx_base64,
-            }))
+            Ok(Response::new(UnsignedTransactionResponse { unsigned_tx }))
         })
         .await;
 
@@ -666,14 +630,11 @@ impl BridgeGatewayService for GatewayServer {
                 .await
                 .map_err(GatewayError::from)?;
 
-            let serialized_tx =
+            let unsigned_tx =
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
-            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
             tracing::debug!("Prepared user_withdraw tx for authority {}", authority);
-            Ok(Response::new(UnsignedTransactionResponse {
-                unsigned_tx_base64,
-            }))
+            Ok(Response::new(UnsignedTransactionResponse { unsigned_tx }))
         })
         .await;
 
@@ -700,14 +661,11 @@ impl BridgeGatewayService for GatewayServer {
                 .await
                 .map_err(GatewayError::from)?;
 
-            let serialized_tx =
+            let unsigned_tx =
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
-            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
             tracing::debug!("Prepared user_close_profile tx for authority {}", authority);
-            Ok(Response::new(UnsignedTransactionResponse {
-                unsigned_tx_base64,
-            }))
+            Ok(Response::new(UnsignedTransactionResponse { unsigned_tx }))
         })
         .await;
 
@@ -739,17 +697,14 @@ impl BridgeGatewayService for GatewayServer {
                 .await
                 .map_err(GatewayError::from)?;
 
-            let serialized_tx =
+            let unsigned_tx =
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
-            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
             tracing::debug!(
                 "Prepared user_dispatch_command tx for authority {}",
                 authority
             );
-            Ok(Response::new(UnsignedTransactionResponse {
-                unsigned_tx_base64,
-            }))
+            Ok(Response::new(UnsignedTransactionResponse { unsigned_tx }))
         })
         .await;
 
@@ -772,14 +727,11 @@ impl BridgeGatewayService for GatewayServer {
                 .await
                 .map_err(GatewayError::from)?;
 
-            let serialized_tx =
+            let unsigned_tx =
                 bincode::serde::encode_to_vec(&transaction, bincode::config::standard())
                     .map_err(GatewayError::from)?;
-            let unsigned_tx_base64 = general_purpose::STANDARD.encode(serialized_tx);
             tracing::debug!("Prepared log_action tx for authority {}", authority);
-            Ok(Response::new(UnsignedTransactionResponse {
-                unsigned_tx_base64,
-            }))
+            Ok(Response::new(UnsignedTransactionResponse { unsigned_tx }))
         })
         .await;
 
@@ -792,24 +744,19 @@ impl BridgeGatewayService for GatewayServer {
     ) -> Result<Response<TransactionResponse>, Status> {
         let result: Result<Response<TransactionResponse>, GatewayError> = (async {
             tracing::info!(
-                "Received SubmitTransaction request for tx starting with: {}",
-                &request
-                    .get_ref()
-                    .signed_tx_base64
-                    .chars()
-                    .take(20)
-                    .collect::<String>()
+                "Received SubmitTransaction request with {} bytes",
+                request.get_ref().signed_tx.len()
             );
 
             let req = request.into_inner();
-
-            let tx_bytes = general_purpose::STANDARD
-                .decode(&req.signed_tx_base64)
-                .map_err(GatewayError::from)?;
+            let tx_bytes = req.signed_tx;
 
             let (transaction, _len): (Transaction, usize) =
-                bincode::serde::borrow_decode_from_slice(&tx_bytes, bincode::config::standard())
-                    .map_err(GatewayError::from)?;
+                bincode::serde::borrow_decode_from_slice(
+                    tx_bytes.as_slice(),
+                    bincode::config::standard(),
+                )
+                .map_err(GatewayError::from)?;
             tracing::debug!("Deserialized transaction: {:?}", transaction);
 
             let builder = TransactionBuilder::new(self.state.rpc_client.clone());
