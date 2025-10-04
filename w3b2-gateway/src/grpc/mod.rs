@@ -65,7 +65,7 @@ impl GatewayServer {
 }
 
 /// The main entry point to start the gRPC server and all background services.
-pub async fn start(config: &GatewayConfig) -> Result<()> {
+pub async fn start(config: &GatewayConfig) -> Result<EventManagerHandle> {
     // --- 1. Initialize dependencies ---
     let db = sled::open(&config.gateway.db_path)?;
     let storage = Arc::new(SledStorage::new(db));
@@ -87,10 +87,13 @@ pub async fn start(config: &GatewayConfig) -> Result<()> {
 
     // --- 3. Set up the gRPC server state ---
 
+    // Clone the handle for the gRPC server state. The original will be returned.
+    let handle_for_server = event_manager_handle.clone();
+
     // Create the shared state, storing the lightweight `handle` for the RPCs to use.
     let app_state = AppState {
         rpc_client,
-        event_manager: event_manager_handle, // Store the handle
+        event_manager: handle_for_server, // Store the cloned handle
         config: Arc::new(config.clone()),
     };
 
@@ -102,12 +105,16 @@ pub async fn start(config: &GatewayConfig) -> Result<()> {
     );
 
     // --- 4. Start the gRPC server ---
-    Server::builder()
-        .add_service(BridgeGatewayServiceServer::new(gateway_server))
-        .serve(addr)
-        .await?;
+    let grpc_server =
+        Server::builder().add_service(BridgeGatewayServiceServer::new(gateway_server));
 
-    Ok(())
+    tokio::spawn(async move {
+        if let Err(e) = grpc_server.serve(addr).await {
+            tracing::error!("gRPC server failed: {}", e);
+        }
+    });
+
+    Ok(event_manager_handle)
 }
 
 // helper: parse a Pubkey returning GatewayError

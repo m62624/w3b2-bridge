@@ -80,6 +80,20 @@ impl EventManagerHandle {
         }
     }
 
+    /// Sends a shutdown signal to the `EventManager`'s background services.
+    ///
+    /// This will cause the `Dispatcher` and `Synchronizer` to gracefully terminate.
+    pub async fn stop(&self) {
+        if self
+            .command_tx
+            .send(DispatcherCommand::Shutdown)
+            .await
+            .is_err()
+        {
+            tracing::warn!("Failed to send shutdown command. EventManager may already be down.");
+        }
+    }
+
     /// Creates and returns a contextual listener for a User `ChainCard`.
     /// This is the primary method for users of the library to listen to their events.
     ///
@@ -153,13 +167,15 @@ impl EventManager {
     /// This method should be spawned as a background task by the application.
     pub async fn run(mut self) {
         tracing::info!("Connector is running all background services.");
-        // We can run them in a select loop to shut down if one of them fails.
+        // Run both workers concurrently. The select loop will exit when either
+        // of the workers finishes, which is the desired behavior for graceful shutdown.
         tokio::select! {
-            _ = self.synchronizer.run() => {
-                tracing::error!("Synchronizer exited unexpectedly.");
+            res = self.synchronizer.run() => {
+                if let Err(e) = res { tracing::error!("Synchronizer exited with an error: {}", e); }
+                else { tracing::info!("Synchronizer has shut down."); }
             },
             _ = self.dispatcher.run() => {
-                tracing::error!("Dispatcher exited unexpectedly.");
+                tracing::info!("Dispatcher has shut down.");
             }
         }
     }

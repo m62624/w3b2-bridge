@@ -35,28 +35,38 @@ impl LiveWorker {
 
         tracing::info!("Live worker connected to WebSocket and listening for logs.");
 
-        while let Some(msg) = stream.next().await {
-            let Response { context, value } = msg;
-            let slot = context.slot;
+        loop {
+            tokio::select! {
+                Some(msg) = stream.next() => {
+                    let Response { context, value } = msg;
+                    let slot = context.slot;
 
-            if slot <= self.ctx.storage.get_last_slot().await? {
-                continue;
-            }
+                    if slot <= self.ctx.storage.get_last_slot().await? {
+                        continue;
+                    }
 
-            for log in value.logs {
-                if let Ok(event) = crate::events::try_parse_log(&log) {
-                    if !matches!(event, crate::events::BridgeEvent::Unknown) {
-                        tracing::info!("[LIVE] slot={} event={:?}", slot, event);
-                        if self.ctx.event_sender.send(event).is_err() {
-                            tracing::warn!("No active receivers for broadcast channel.");
+                    for log in value.logs {
+                        if let Ok(event) = crate::events::try_parse_log(&log) {
+                            if !matches!(event, crate::events::BridgeEvent::Unknown) {
+                                tracing::info!("[LIVE] slot={} event={:?}", slot, event);
+                                if self.ctx.event_sender.send(event).is_err() {
+                                    tracing::warn!("No active receivers for broadcast channel. Shutting down LiveWorker.");
+                                    return Ok(());
+                                }
+                            }
                         }
                     }
-                }
+                    self.ctx
+                        .storage
+                        .set_sync_state(slot, &value.signature)
+                        .await?;
+                },
+                _ = self.ctx.event_sender.closed() => {
+                    tracing::info!("LiveWorker: event channel closed, shutting down.");
+                    return Ok(());
+                },
+                else => break,
             }
-            self.ctx
-                .storage
-                .set_sync_state(slot, &value.signature)
-                .await?;
         }
         Ok(())
     }

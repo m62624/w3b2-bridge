@@ -41,6 +41,8 @@ pub enum DispatcherCommand {
     Register(Pubkey, mpsc::Sender<BridgeEvent>),
     /// Unregisters a listener for a given public key.
     Unregister(Pubkey),
+    /// Signals the dispatcher to shut down gracefully.
+    Shutdown,
 }
 
 impl Dispatcher {
@@ -83,6 +85,10 @@ impl Dispatcher {
                         DispatcherCommand::Unregister(pubkey) => {
                             tracing::info!("Dispatcher: Unregistering listener for {}", pubkey);
                             self.listeners.remove(&pubkey);
+                        },
+                        DispatcherCommand::Shutdown => {
+                            tracing::info!("Dispatcher: Received shutdown command. Exiting.");
+                            break;
                         }
                     }
                 },

@@ -26,15 +26,22 @@ impl CatchupWorker {
     /// In each iteration, it fetches new signatures and processes them.
     pub async fn run(self) -> Result<()> {
         loop {
-            // The logic is now broken into smaller, more manageable pieces.
-            let signatures = self.fetch_new_signatures().await?;
-            if !signatures.is_empty() {
-                tracing::info!("Found {} new signatures to process.", signatures.len());
-                self.process_signatures(signatures).await?;
-            }
-
             let poll_interval = self.ctx.config.synchronizer.poll_interval_secs;
-            sleep(Duration::from_secs(poll_interval)).await;
+
+            tokio::select! {
+                _ = sleep(Duration::from_secs(poll_interval)) => {
+                    let signatures = self.fetch_new_signatures().await?;
+                    if !signatures.is_empty() {
+                        tracing::info!("Found {} new signatures to process.", signatures.len());
+                        self.process_signatures(signatures).await?;
+                    }
+                }
+                // If the broadcast channel is closed, it means we are shutting down.
+                _ = self.ctx.event_sender.closed() => {
+                    tracing::info!("CatchupWorker: event channel closed, shutting down.");
+                    return Ok(());
+                }
+            }
         }
     }
 
